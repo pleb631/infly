@@ -1,0 +1,149 @@
+import threading
+
+import pytest
+from concurrent.futures import Future
+
+from infly.core.contracts import InferenceRequest, InferenceResult, TaskStatus
+from infly.core.errors import ErrorCode, PlatformError
+from infly.core.models import ModelDefinition
+from infly.runtime.config import SchedulerConfig, WorkerGroup
+from infly.runtime.registry import ModelRegistry
+from infly.runtime.scheduler import TaskScheduler
+from infly.runtime.strategy.embedded_process_pool import EmbeddedProcessPoolStrategy
+
+
+def _registry(*definitions: ModelDefinition) -> ModelRegistry:
+    registry = ModelRegistry()
+    for definition in definitions:
+        registry.add(definition)
+    return registry
+
+
+def _request(
+    request_id: str,
+    model_name: str = "echo",
+) -> InferenceRequest:
+    return InferenceRequest(
+        request_id=request_id,
+        model_name=model_name,
+        payload={"text": request_id},
+        caller="integration",
+    )
+
+
+class ConcurrentBlockingStrategy:
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self._lock = threading.Lock()
+        self.running = 0
+        self.max_running = 0
+        self.first_started = threading.Event()
+        self.both_started = threading.Event()
+
+    def execute(self, request: InferenceRequest) -> Future[InferenceResult]:
+        future: Future[InferenceResult] = Future()
+
+        with self._lock:
+            self.running += 1
+            self.max_running = max(self.max_running, self.running)
+            self.first_started.set()
+            if self.running >= 2:
+                self.both_started.set()
+
+        def complete() -> None:
+            self.release.wait()
+            with self._lock:
+                self.running -= 1
+            future.set_result(
+                InferenceResult(
+                    request_id=request.request_id,
+                    data={"request_id": request.request_id},
+                )
+            )
+
+        threading.Thread(target=complete, daemon=True).start()
+        return future
+
+    def close(self) -> None:
+        self.release.set()
+
+
+def test_submit_and_wait_runs_through_embedded_pool() -> None:
+    pool = EmbeddedProcessPoolStrategy(
+        _registry(
+            ModelDefinition(
+                model_name="echo",
+                class_path="tests.support.fake_models:ContextModel",
+            )
+        ),
+        [WorkerGroup(name="gpu", device="cuda:7")],
+    )
+    scheduler = TaskScheduler(
+        pool,
+        scheduler_config=SchedulerConfig(num_workers=1),
+    )
+    scheduler.start()
+    try:
+        result = scheduler.submit_and_wait(_request("hello"))
+    finally:
+        scheduler.stop()
+
+    assert result.request_id == "hello"
+    assert result.data["payload"]["text"] == "hello"
+    assert result.data["worker_context"]["group_name"] == "gpu"
+    assert result.data["worker_context"]["device"] == "cuda:7"
+    assert result.data["environment_device"] == "cuda:7"
+    assert result.diagnostics["model_key"] == "echo"
+    assert result.diagnostics["caller"] == "integration"
+
+
+def test_submit_and_wait_propagates_worker_failure() -> None:
+    pool = EmbeddedProcessPoolStrategy(
+        _registry(
+            ModelDefinition(
+                model_name="broken",
+                class_path="tests.support.fake_models:RaisingPredictModel",
+            )
+        ),
+        [WorkerGroup(name="cpu", device="cpu")],
+    )
+    scheduler = TaskScheduler(
+        pool,
+        scheduler_config=SchedulerConfig(num_workers=1),
+    )
+    scheduler.start()
+    try:
+        with pytest.raises(PlatformError) as caught:
+            scheduler.submit_and_wait(_request("boom", "broken"))
+    finally:
+        scheduler.stop()
+
+    assert caught.value.code == ErrorCode.INTERNAL_ERROR
+    assert "intentional prediction failure" in str(caught.value)
+
+
+def test_scheduler_can_process_multiple_tasks_in_parallel() -> None:
+    strategy = ConcurrentBlockingStrategy()
+    scheduler = TaskScheduler(
+        strategy,  # type: ignore[arg-type]
+        scheduler_config=SchedulerConfig(num_workers=2),
+    )
+    scheduler.start()
+    try:
+        first = scheduler.submit(_request("first"))
+        second = scheduler.submit(_request("second"))
+
+        assert strategy.first_started.wait(1)
+        assert strategy.both_started.wait(1)
+        assert scheduler.query(first).status == TaskStatus.RUNNING
+        assert scheduler.query(second).status == TaskStatus.RUNNING
+
+        strategy.release.set()
+        first_result = scheduler.query(first, wait=True)
+        second_result = scheduler.query(second, wait=True)
+    finally:
+        scheduler.stop()
+
+    assert strategy.max_running == 2
+    assert first_result.status == TaskStatus.COMPLETED
+    assert second_result.status == TaskStatus.COMPLETED
