@@ -1,7 +1,14 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "infly"
-version = "0.1.0"
+dynamic = ["version"]
 requires-python = ">=3.12"
+description = "A lightweight and efficient infer runtime."
+readme = "README.md"
+license = { "text" = "MIT" }
 dependencies = [
   "pydantic",
   "setproctitle>=1.3.7",
@@ -19,3 +26,6 @@ include = ["infly*"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.setuptools.dynamic]
+version = { attr = "infly.__version__" }
