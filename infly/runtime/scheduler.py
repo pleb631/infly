@@ -18,7 +18,7 @@ from infly.runtime.config import SchedulerConfig
 from infly.runtime.task_backend import InMemoryTaskBackend
 from infly.runtime.log import get_logger
 
-log = get_logger("infly")
+log = get_logger()
 
 class TaskScheduler:
     def __init__(

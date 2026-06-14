@@ -11,7 +11,7 @@ from infly.core.errors import ErrorCode
 from infly.core.ports import TaskBackend
 from infly.runtime.log import get_logger
 
-log = get_logger("infly")
+log = get_logger()
 
 
 class InMemoryTaskBackend:
@@ -46,7 +46,7 @@ class InMemoryTaskBackend:
                 del self._records[record.task_id]
                 raise
             self._sequence += 1
-        log.debug(
+        log.info(
             "task_submitted task_id=%s request_id=%s model=%s priority=%s",
             record.task_id,
             record.request.request_id,
@@ -59,7 +59,7 @@ class InMemoryTaskBackend:
             if not self._pending:
                 return None
             _, _, task_id = heapq.heappop(self._pending)
-        log.debug("task_pulled task_id=%s", task_id)
+        log.info("task_pulled task_id=%s", task_id)
         return task_id
 
     def get(self, task_id: str) -> TaskRecord | None:
@@ -123,7 +123,7 @@ class InMemoryTaskBackend:
             else:
                 self._terminal_finished_at.pop(task_id, None)
                 self._read_terminal_tasks.discard(task_id)
-        log.debug(
+        log.info(
             "task_status_updated task_id=%s status=%s error_code=%s",
             task_id,
             status,

@@ -5,8 +5,11 @@ from infly.core.errors import ErrorCode, PlatformError
 from infly.core.models import ModelDefinition
 from infly.core.ports import ModelProtocol
 
+from infly.runtime.log import get_logger
+log = get_logger()
 
-def load_model(definition: ModelDefinition, log) -> ModelProtocol:
+
+def load_model(definition: ModelDefinition) -> ModelProtocol:
     log.info(
         "model_load_started model=%s class_path=%s",
         definition.model_name,

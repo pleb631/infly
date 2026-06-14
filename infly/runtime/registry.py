@@ -2,7 +2,7 @@ from infly.core.errors import ErrorCode, PlatformError
 from infly.core.models import ModelDefinition
 from infly.runtime.log import get_logger
 
-log = get_logger("registry")
+log = get_logger()
 
 class ModelRegistry:
     def __init__(self) -> None:

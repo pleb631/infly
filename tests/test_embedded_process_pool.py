@@ -1,12 +1,19 @@
+import logging
+from collections import deque
+
 import pytest
 
 from infly.core.contracts import InferenceRequest
 from infly.core.errors import ErrorCode, PlatformError
 
 from infly.core.models import ModelDefinition
+from infly.runtime.log import ContextFilter, LoggingSettings
 from infly.runtime.config import WorkerGroup
 from infly.runtime.registry import ModelRegistry
-from infly.runtime.strategy.embedded_process_pool import EmbeddedProcessPoolStrategy
+from infly.runtime.strategy.embedded_process_pool import (
+    EmbeddedProcessPoolStrategy,
+    _worker_loop,
+)
 
 
 def _registry(*definitions: ModelDefinition) -> ModelRegistry:
@@ -123,6 +130,68 @@ def test_pool_fails_construction_when_model_preload_fails() -> None:
     assert "startup" in str(caught.value).lower()
 
 
+def test_abort_startup_closes_worker_and_result_queues(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import infly.runtime.strategy.embedded_process_pool as pool_module
+
+    class FakeQueue:
+        def __init__(self) -> None:
+            self.closed = False
+            self.joined = False
+
+        def close(self) -> None:
+            self.closed = True
+
+        def join_thread(self) -> None:
+            self.joined = True
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.joined: list[float] = []
+            self.closed = False
+
+        def is_alive(self) -> bool:
+            return False
+
+        def join(self, timeout=None) -> None:
+            self.joined.append(timeout)
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeLogManager:
+        def __init__(self) -> None:
+            self.stopped = False
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    pool = object.__new__(EmbeddedProcessPoolStrategy)
+    worker = SimpleNamespace(
+        worker_id="cpu_R0",
+        generation=1,
+        process=FakeProcess(),
+        task_queue=FakeQueue(),
+        lifecycle_queue=FakeQueue(),
+        alive=True,
+    )
+    pool._workers = {"cpu_R0": worker}
+    pool._log_manager = FakeLogManager()
+    pool._accepting = True
+    pool._closing = False
+    pool._result_queue = FakeQueue()
+
+    pool_module.EmbeddedProcessPoolStrategy._abort_startup(pool)
+
+    assert worker.task_queue is None
+    assert worker.lifecycle_queue is None
+    assert pool._result_queue.closed is True
+    assert pool._result_queue.joined is True
+    assert worker.process.closed is True
+    assert pool._log_manager.stopped is True
+
+
 def test_pool_startup_timeout_is_internal_error() -> None:
     registry = _registry(
         _definition("slow", "SlowInitModel", delay_seconds=1)
@@ -228,36 +297,98 @@ def test_close_stops_logging_listener() -> None:
 
     pool.close()
 
-    assert not pool.listener.thread.is_alive()
+    assert not pool.log_manager.listener.thread.is_alive()
 
 
-def test_startup_failure_stops_logging_listener(monkeypatch) -> None:
+def test_worker_loop_applies_log_context_in_worker_layer(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FakeResult:
+        def model_dump(self) -> dict[str, str]:
+            return {"result": "ok"}
+
+    class FakeQueue:
+        def __init__(self, items: list[object] | None = None) -> None:
+            self.items = deque(items or [])
+            self.put_items: list[object] = []
+
+        def get(self):
+            return self.items.popleft()
+
+        def put(self, item, timeout=None):
+            self.put_items.append(item)
+
+    class FakeService:
+        def __init__(self, registry: ModelRegistry) -> None:
+            self.registry = registry
+
+        def preload(self) -> None:
+            logging.getLogger("fake.service").info("service_preload_called")
+
+        def predict(self, request: InferenceRequest) -> FakeResult:
+            logging.getLogger("fake.service").info(
+                "service_predict_called request_id=%s",
+                request.request_id,
+            )
+            return FakeResult()
+
     import infly.runtime.strategy.embedded_process_pool as pool_module
 
-    class FakeListener:
-        def __init__(self) -> None:
-            self.stopped = True
-            
-        def start(self) -> None:            
-            self.stopped = False
-        
-        def stop(self) -> None:
-            self.stopped = True
+    caplog.handler.addFilter(ContextFilter())
+    caplog.set_level(logging.INFO)
 
-    listener = FakeListener()
+    monkeypatch.setattr(pool_module, "setup_worker_logging", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pool_module, "setproctitle", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         pool_module,
-        "RoutingQueueListener",
-        lambda queue: listener,
+        "_restore_parent_import_path",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(pool_module, "InferenceService", FakeService)
+
+    task_queue = FakeQueue(
+        [
+            {
+                "request_id": "req-1",
+                "model_name": "echo",
+                "payload": {"text": "hello"},
+                "caller": "test",
+            },
+            None,
+        ]
+    )
+    result_queue = FakeQueue()
+    lifecycle_queue = FakeQueue()
+
+    _worker_loop(
+        worker_id="worker-1",
+        generation=1,
+        task_queue=task_queue,
+        result_queue=result_queue,
+        lifecycle_queue=lifecycle_queue,
+        registry=ModelRegistry(),
+        environment={},
+        device="cpu",
+        parent_sys_path=[],
+        parent_cwd="",
+        log_queue=None,
+        log_settings=LoggingSettings(),
     )
 
-    with pytest.raises(PlatformError):
-        EmbeddedProcessPoolStrategy(
-            _registry(_definition("broken", "FailingModel")),
-            [WorkerGroup(name="cpu", device="cpu")],
-            startup_timeout_seconds=2,
-        )
+    assert any(
+        record.message == "service_preload_called"
+        and record.log_category == "worker"
+        and record.log_name == "worker-1"
+        for record in caplog.records
+    )
+    assert any(
+        record.message.startswith("service_predict_called")
+        and record.log_category == "worker"
+        and record.log_name == "worker-1"
+        for record in caplog.records
+    )
+    assert lifecycle_queue.put_items[0]["kind"] == "READY"
+    assert result_queue.put_items[0]["ok"] is True
 
-    assert listener.stopped is True
 
-    assert listener.stopped is True

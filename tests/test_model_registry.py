@@ -11,12 +11,7 @@ from infly.runtime.registry import ModelRegistry
 from infly.runtime.service import InferenceService
 
 
-@pytest.fixture
-def log() -> Mock:
-    return Mock()
-
-
-def test_loader_builds_model_with_module_dict_and_kwargs(log: Mock) -> None:
+def test_loader_builds_model_with_module_dict_and_kwargs() -> None:
     registry = ModelRegistry()
     definition = ModelDefinition(
         model_name="echo",
@@ -26,7 +21,7 @@ def test_loader_builds_model_with_module_dict_and_kwargs(log: Mock) -> None:
     )
     registry.add(definition)
 
-    loaded = load_model(registry.get("echo"), log)
+    loaded = load_model(registry.get("echo"))
 
     assert loaded.module_dict == {"gpu": 0}
     assert loaded.kwargs == {"backend": "onnx"}
@@ -125,20 +120,18 @@ def test_load_model_invalid_reference_raises_platform_error(
     class_path: str,
     expected_code: ErrorCode,
     expected_fragment: str,
-    log: Mock,
 ) -> None:
     definition = ModelDefinition(
         model_name="bad",
         class_path=class_path,
     )
     with pytest.raises(PlatformError) as exc:
-        load_model(definition, log)
+        load_model(definition)
     assert exc.value.code == expected_code
     assert expected_fragment in str(exc.value)
 
 
 def test_load_model_reports_missing_internal_dependency_as_internal_error(
-    log: Mock,
     monkeypatch,
 ) -> None:
     missing_dependency = ModuleNotFoundError(
@@ -155,7 +148,7 @@ def test_load_model_reports_missing_internal_dependency_as_internal_error(
     )
 
     with pytest.raises(PlatformError) as exc:
-        load_model(definition, log)
+        load_model(definition)
 
     assert exc.value.code == ErrorCode.INTERNAL_ERROR
     assert "missing_dependency" in str(exc.value)
@@ -170,7 +163,7 @@ def test_model_definition_rejects_reserved_worker_context() -> None:
         )
 
 
-def test_inference_service_reloads_replaced_model_definition(log: Mock) -> None:
+def test_inference_service_reloads_replaced_model_definition() -> None:
     from tests.support.fake_models import CountingModel
 
     CountingModel.instances = 0
@@ -182,7 +175,7 @@ def test_inference_service_reloads_replaced_model_definition(log: Mock) -> None:
             kwargs={"version": 1},
         )
     )
-    service = InferenceService(registry, log)
+    service = InferenceService(registry)
 
     first = service.predict(
         InferenceRequest(
@@ -213,3 +206,72 @@ def test_inference_service_reloads_replaced_model_definition(log: Mock) -> None:
 
     assert second.request_id == "req-2"
     assert CountingModel.instances == 2
+
+
+def test_inference_service_uses_default_log_context(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from infly.runtime.log import ContextFilter, log_context
+    import logging
+
+    root = logging.getLogger()
+    original_handlers = list(root.handlers)
+    original_level = root.level
+    service_logger = logging.getLogger("infly.runtime.service")
+    model_loader_logger = logging.getLogger("infly.runtime.model_loader")
+    original_service_level = service_logger.level
+    original_model_loader_level = model_loader_logger.level
+    root.handlers = [caplog.handler]
+    root.setLevel(logging.DEBUG)
+    service_logger.setLevel(logging.DEBUG)
+    model_loader_logger.setLevel(logging.INFO)
+    caplog.handler.addFilter(ContextFilter())
+    caplog.set_level(logging.DEBUG)
+    try:
+        registry = ModelRegistry()
+        registry.add(
+            ModelDefinition(
+                model_name="echo",
+                class_path="tests.support.fake_models:EchoModel",
+            )
+        )
+        service = InferenceService(registry)
+
+        with log_context():
+            preload_result = service.preload()
+            result = service.predict(
+                InferenceRequest(
+                    request_id="req-1",
+                    model_name="echo",
+                    payload={"text": "hello"},
+                    caller="test",
+                )
+            )
+
+        assert preload_result is None
+        assert result.request_id == "req-1"
+        assert any(
+            record.message.startswith("model_preload_started")
+            and record.log_category == ""
+            and record.log_name == "infly"
+            for record in caplog.records
+        )
+        assert any(
+            record.message.startswith("model_load_started")
+            and record.log_category == ""
+            and record.log_name == "infly"
+            for record in caplog.records
+        )
+        assert any(
+            record.message.startswith("inference_started")
+            for record in caplog.records
+        )
+        assert any(
+            record.message.startswith("inference_completed")
+            for record in caplog.records
+        )
+    finally:
+        root.handlers = original_handlers
+        root.setLevel(original_level)
+        service_logger.setLevel(original_service_level)
+        model_loader_logger.setLevel(original_model_loader_level)

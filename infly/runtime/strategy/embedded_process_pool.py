@@ -6,7 +6,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from concurrent.futures import Future
-from multiprocessing import get_context,Queue
+from multiprocessing import get_context, Queue
 from pydantic import BaseModel, Field
 from queue import Empty
 from typing import Any
@@ -19,8 +19,11 @@ from infly.runtime.config import WorkerGroup
 from infly.runtime.registry import ModelRegistry
 from infly.runtime.service import InferenceService
 from infly.runtime.log import (
-    RoutingQueueListener,
+    MainLogManager,
+    LoggingSettings,
     get_logger,
+    log_context,
+    setup_main_logging,
     setup_worker_logging,
 )
 
@@ -63,11 +66,12 @@ def _worker_loop(
     parent_sys_path: list[str],
     parent_cwd: str,
     log_queue: Any,
+    log_settings: LoggingSettings,
 ) -> None:
-    
-    setup_worker_logging(log_queue)
+
+    setup_worker_logging(log_queue, settings=log_settings)
     setproctitle(f"INFLY::{worker_id}")
-    
+
     log = get_logger(name=worker_id, category="worker")
     log.info(
         "worker_started worker_id=%s generation=%s device=%s",
@@ -79,8 +83,9 @@ def _worker_loop(
         _restore_parent_import_path(parent_sys_path, parent_cwd)
         os.environ.update(environment)
         os.environ["INFLY_DEVICE"] = device
-        service = InferenceService(registry, log)
-        service.preload()
+        service = InferenceService(registry)
+        with log_context(name=worker_id, category="worker"):
+            service.preload()
         lifecycle_queue.put(
             {
                 "kind": "READY",
@@ -129,7 +134,8 @@ def _worker_loop(
                 request.request_id,
                 request.model_name,
             )
-            result = service.predict(request)
+            with log_context(name=worker_id, category="worker"):
+                result = service.predict(request)
             result_queue.put(
                 {
                     "ok": True,
@@ -198,32 +204,9 @@ class EmbeddedProcessPoolStrategy:
         startup_timeout_seconds: float = 300,
     ) -> None:
 
-        log.info(
-            "pool_starting groups=%s startup_timeout=%s",
-            len(worker_groups),
-            startup_timeout_seconds,
-        )
-        if not worker_groups:
-            raise PlatformError(
-                ErrorCode.INTERNAL_ERROR,
-                "EmbeddedProcessPoolStrategy requires at least one worker group",
-            )
-        if startup_timeout_seconds <= 0:
-            raise PlatformError(
-                ErrorCode.INTERNAL_ERROR,
-                "startup_timeout_seconds must be greater than zero",
-            )
-
-        group_names = [group.name for group in worker_groups]
-        if len(group_names) != len(set(group_names)):
-            raise PlatformError(
-                ErrorCode.INTERNAL_ERROR,
-                "WorkerGroup names must be unique",
-            )
-
         self._registry = registry
         self._startup_timeout_seconds = startup_timeout_seconds
-        self._groups = {group.name: group for group in worker_groups}
+        self._groups: dict[str, WorkerGroup] = {}
         self._group_models: dict[str, tuple[str, ...]] = {}
         self._model_groups: dict[str, list[str]] = defaultdict(list)
         self._workers: dict[str, _WorkerState] = {}
@@ -238,42 +221,69 @@ class EmbeddedProcessPoolStrategy:
         self._accepting = True
         self._closing = False
         self._close_complete = False
-        self._logging_started = False
-        self._logging_stopped = True
-
-        all_model_names = tuple(definition.model_name for definition in registry.list())
-        for group in worker_groups:
-            model_names = tuple(group.models) if group.models else all_model_names
-            for model_name in model_names:
-                try:
-                    registry.get(model_name)
-                except PlatformError as exc:
-                    raise PlatformError(
-                        ErrorCode.INTERNAL_ERROR,
-                        f"WorkerGroup '{group.name}' references missing model "
-                        f"'{model_name}'",
-                    ) from exc
-                self._model_groups[model_name].append(group.name)
-            self._group_models[group.name] = model_names
-            for index in range(group.process_count):
-                worker_id = f"{group.name}_R{index}"
-                self._workers[worker_id] = _WorkerState(
-                    worker_id=worker_id,
-                    index=index,
-                    group=group,
-                    model_names=model_names,
+        if os.name == "nt":
+            self._queue_factory = Queue
+        else:
+            self._queue_factory = self._mp_context.Queue
+        try:
+            self._log_manager: MainLogManager = setup_main_logging(
+                mp_context=self._mp_context,
+                start=True,
+            )
+            self._log_settings = self._log_manager.settings
+            log.info(
+                "pool_starting groups=%s startup_timeout=%s",
+                len(worker_groups),
+                startup_timeout_seconds,
+            )
+            if not worker_groups:
+                raise PlatformError(
+                    ErrorCode.INTERNAL_ERROR,
+                    "EmbeddedProcessPoolStrategy requires at least one worker group",
+                )
+            if startup_timeout_seconds <= 0:
+                raise PlatformError(
+                    ErrorCode.INTERNAL_ERROR,
+                    "startup_timeout_seconds must be greater than zero",
                 )
 
-        self.log_queue: Queue = self._mp_context.Queue()
-        self.listener = RoutingQueueListener(self.log_queue)
-        try:
-            self._result_queue: Queue = self._mp_context.Queue()
+            group_names = [group.name for group in worker_groups]
+            if len(group_names) != len(set(group_names)):
+                raise PlatformError(
+                    ErrorCode.INTERNAL_ERROR,
+                    "WorkerGroup names must be unique",
+                )
+
+            self._groups = {group.name: group for group in worker_groups}
+            all_model_names = tuple(
+                definition.model_name for definition in registry.list()
+            )
+            for group in worker_groups:
+                model_names = tuple(group.models) if group.models else all_model_names
+                for model_name in model_names:
+                    try:
+                        registry.get(model_name)
+                    except PlatformError as exc:
+                        raise PlatformError(
+                            ErrorCode.INTERNAL_ERROR,
+                            f"WorkerGroup '{group.name}' references missing model "
+                            f"'{model_name}'",
+                        ) from exc
+                    self._model_groups[model_name].append(group.name)
+                self._group_models[group.name] = model_names
+                for index in range(group.process_count):
+                    worker_id = f"{group.name}_R{index}"
+                    self._workers[worker_id] = _WorkerState(
+                        worker_id=worker_id,
+                        index=index,
+                        group=group,
+                        model_names=model_names,
+                    )
+
+            self._result_queue: Queue = self._queue_factory()
             for worker in self._workers.values():
                 self._launch_worker(worker)
             self._await_initial_startup()
-            self._logging_started = True
-            self._logging_stopped = False
-            self.listener.start()
         except Exception as exc:
             self._abort_startup()
             if isinstance(exc, PlatformError):
@@ -439,18 +449,23 @@ class EmbeddedProcessPoolStrategy:
                 "EmbeddedProcessPoolStrategy closed before request completed",
             )
         )
-        self._stop_logging()
+        self._close_queues()
+        self._log_manager.stop()
         with self._lock:
             self._close_complete = True
         log.info("pool_closed")
+
+    @property
+    def log_manager(self) -> MainLogManager:
+        return self._log_manager
 
     def _launch_worker(self, worker: _WorkerState) -> None:
         worker.generation += 1
         worker.alive = False
         worker.outstanding = 0
         worker.next_restart_at = None
-        worker.task_queue = self._mp_context.Queue()
-        worker.lifecycle_queue = self._mp_context.Queue(maxsize=1)
+        worker.task_queue = self._queue_factory()
+        worker.lifecycle_queue = self._queue_factory(1)
         child_registry = self._worker_registry(worker)
         log.info(
             "worker_launching worker_id=%s generation=%s",
@@ -470,7 +485,8 @@ class EmbeddedProcessPoolStrategy:
                 worker.group.device,
                 list(sys.path),
                 os.getcwd(),
-                self.log_queue,
+                self._log_manager.queue,
+                self._log_settings,
             ),
             daemon=True,
             name=worker.worker_id,
@@ -563,23 +579,34 @@ class EmbeddedProcessPoolStrategy:
         self._closing = True
         for worker in self._workers.values():
             self._stop_process(worker, terminate_after=0)
-        self._stop_logging()
+        self._close_queues()
+        manager = getattr(self, "_log_manager", None)
+        if manager is not None:
+            manager.stop()
 
-    def _stop_logging(self) -> None:
-        with self._lock:
-            if self._logging_stopped:
-                return
-            self._logging_stopped = True
-        try:
-            if self._logging_started:
-                self.listener.stop()
-        finally:
-            close = getattr(self.log_queue, "close", None)
-            if close is not None:
+    def _close_queue(self, queue: Any | None) -> None:
+        if queue is None:
+            return
+        close = getattr(queue, "close", None)
+        if close is not None:
+            try:
                 close()
-            join_thread = getattr(self.log_queue, "join_thread", None)
-            if join_thread is not None:
+            except Exception:
+                pass
+        join_thread = getattr(queue, "join_thread", None)
+        if join_thread is not None:
+            try:
                 join_thread()
+            except Exception:
+                pass
+
+    def _close_queues(self) -> None:
+        for worker in self._workers.values():
+            self._close_queue(getattr(worker, "task_queue", None))
+            self._close_queue(getattr(worker, "lifecycle_queue", None))
+            worker.task_queue = None
+            worker.lifecycle_queue = None
+        self._close_queue(getattr(self, "_result_queue", None))
 
     def _stop_process(
         self,
@@ -600,6 +627,12 @@ class EmbeddedProcessPoolStrategy:
             )
             process.terminate()
             process.join(timeout=1)
+        close = getattr(process, "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception:
+                pass
         worker.alive = False
         log.info(
             "worker_stopped worker_id=%s generation=%s",
@@ -868,7 +901,7 @@ class EmbeddedProcessPoolStrategy:
                 f"Pool shut down after worker '{failed_worker.worker_id}' failed",
             )
         )
-        self._stop_logging()
+        self._log_manager.stop()
 
     def _fail_all_pending(self, exc: Exception) -> None:
         with self._lock:

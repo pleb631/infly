@@ -1,4 +1,4 @@
-# infly
+﻿# infly
 
 `infly` 是一个面向 Python 应用的推理运行时。它把模型注册、任务调度、并发执行、失败回收和多进程模型推理封装起来，适合直接嵌入到你的服务里使用。
 
@@ -174,14 +174,67 @@ finally:
 
 ### 日志
 
-日志行为可以通过环境变量控制：
+推荐在程序启动时先调用 `configure_logging()`，再创建运行时对象。
 
-- `INFLY_LOG_ROOT`：日志根目录，默认 `logs/infly`
-- `INFLY_LOG_LEVEL`：日志级别，默认 `INFO`
-- `INFLY_LOG_SAVE_DAYS`：保留天数，默认 `30`
-- `INFLY_LOG_FORMAT`：日志格式
+```python
+from infly.runtime.log import configure_logging
 
-worker 进程会自动继承这些配置。
+configure_logging(
+    log_root="logs/infly",
+    log_level="INFO",
+    save_days=30,
+    log_format="%(asctime)s - %(name)s - %(module)s:%(lineno)d - %(levelname)s - %(message)s",
+)
+```
+
+不调用时会使用内置默认值：`logs/infly`、`INFO`、`30`、`%(asctime)s - %(name)s - %(module)s:%(lineno)d - %(levelname)s - %(message)s`。
+
+#### 主线程
+
+主线程通常只负责初始化和注册日志 sink。
+
+```python
+from infly.runtime.log import configure_logging
+from infly.runtime.strategy.embedded_process_pool import EmbeddedProcessPoolStrategy
+
+configure_logging(log_level="INFO")
+
+pool = EmbeddedProcessPoolStrategy(registry, worker_groups)
+
+def on_log(record):
+    print(record.levelname, record.getMessage())
+
+pool.log_manager.add_sink(on_log)
+```
+
+#### 多线程
+
+多线程场景里，每个线程直接获取 logger 即可，不需要单独再初始化一次。
+
+```python
+from infly.runtime.log import get_logger, log_context
+
+log = get_logger("worker")
+
+def run_task(task_id: str) -> None:
+    with log_context("task", task_id):
+        log.info("task started")
+```
+
+#### 多进程
+
+如果你自己写子进程入口，在子进程启动后先安装队列日志，再创建 logger：
+
+```python
+from infly.runtime.log import get_logger, setup_worker_logging
+
+def worker_main(log_queue) -> None:
+    setup_worker_logging(log_queue)
+    log = get_logger("worker")
+    log.info("worker started")
+```
+
+如果你使用的是 `EmbeddedProcessPoolStrategy`，这一步已经由 runtime 自动完成，子进程不用再手动调用 `setup_worker_logging()`。
 
 ## 错误处理
 
