@@ -15,10 +15,14 @@ from infly.core.contracts import (
 from infly.core.errors import ErrorCode, PlatformError
 from infly.core.ports import ExecutionStrategy, TaskBackend
 from infly.runtime.config import SchedulerConfig
-from infly.runtime.task_backend import InMemoryTaskBackend
 from infly.runtime.log import get_logger
+from infly.runtime.task_backend import InMemoryTaskBackend
 
 log = get_logger()
+
+_TERMINAL_READ_STATUSES = {TaskStatus.COMPLETED, TaskStatus.FAILED}
+_WAIT_POLL_INTERVAL_SECONDS = 0.1
+
 
 class TaskScheduler:
     def __init__(
@@ -34,9 +38,7 @@ class TaskScheduler:
             backend
             if backend is not None
             else InMemoryTaskBackend(
-                max_retained_terminal_tasks=(
-                    self._scheduler_config.max_retained_terminal_tasks
-                )
+                max_retained_terminal_tasks=self._scheduler_config.max_retained_terminal_tasks
             )
         )
         self._outstanding_slots = threading.BoundedSemaphore(
@@ -47,7 +49,6 @@ class TaskScheduler:
         self._threads: list[threading.Thread] = []
         self._lifecycle_lock = threading.Lock()
         self._threads_lock = threading.Lock()
-        self._execution_futures: dict[str, Future[InferenceResult]] = {}
         self._outstanding_task_ids: set[str] = set()
         self._outstanding_lock = threading.Lock()
         self._accepting = True
@@ -106,8 +107,7 @@ class TaskScheduler:
             if not self._strategy_closed:
                 self._strategy.close()
                 self._strategy_closed = True
-            with self._condition:
-                self._condition.notify_all()
+            self._notify_waiters()
             deadline = time.monotonic() + timeout
             for thread in threads:
                 remaining = max(0.0, deadline - time.monotonic())
@@ -138,6 +138,8 @@ class TaskScheduler:
                 error_message="Scheduler stopped before task execution started.",
             )
             self._release_outstanding_slot(record.task_id)
+        if pending_records:
+            self._notify_waiters()
 
     def submit(self, request: InferenceRequest, *, priority: int = 0) -> str:
         with self._lifecycle_lock:
@@ -191,8 +193,7 @@ class TaskScheduler:
                 request.model_name,
                 priority,
             )
-            with self._condition:
-                self._condition.notify_all()
+            self._notify_waiters()
             return task_id
 
     def submit_and_wait(
@@ -240,11 +241,24 @@ class TaskScheduler:
         if record is None:
             log.warning("task_query_failed task_id=%s reason=not_found", task_id)
             raise PlatformError(ErrorCode.NOT_FOUND, f"Task '{task_id}' not found.")
-        if record.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
+        if record.status in _TERMINAL_READ_STATUSES:
             return self._read_terminal_response(task_id, consume=consume)
         if not wait:
             return TaskQueryResponse.from_record(record)
 
+        return self._wait_for_terminal_response(
+            task_id,
+            timeout_seconds=timeout_seconds,
+            consume=consume,
+        )
+
+    def _wait_for_terminal_response(
+        self,
+        task_id: str,
+        *,
+        timeout_seconds: float | None,
+        consume: bool,
+    ) -> TaskQueryResponse:
         deadline = None
         if timeout_seconds is not None:
             if timeout_seconds < 0:
@@ -261,50 +275,25 @@ class TaskScheduler:
                     raise PlatformError(
                         ErrorCode.NOT_FOUND, f"Task '{task_id}' not found."
                     )
-                if record.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
+                if record.status in _TERMINAL_READ_STATUSES:
                     return self._read_terminal_response(
                         task_id,
                         consume=consume,
                     )
-                execution_future = self._execution_futures.get(task_id)
-                if execution_future is not None:
-                    break
                 if deadline is not None:
                     remaining = self._remaining_time(deadline)
                     if remaining <= 0:
-                        raise self._timeout_error(task_id, "start")
-                    self._condition.wait(timeout=min(remaining, 0.1))
+                        phase = (
+                            "start"
+                            if record.status == TaskStatus.PENDING
+                            else "complete"
+                        )
+                        raise self._timeout_error(task_id, phase)
+                    self._condition.wait(
+                        timeout=min(remaining, _WAIT_POLL_INTERVAL_SECONDS)
+                    )
                 else:
                     self._condition.wait()
-
-        try:
-            if deadline is None:
-                execution_future.result()
-            else:
-                remaining = self._remaining_time(deadline)
-                if remaining <= 0:
-                    raise self._timeout_error(task_id, "complete")
-                execution_future.result(timeout=remaining)
-        except Exception:
-            if deadline is not None and time.monotonic() >= deadline:
-                raise self._timeout_error(task_id, "complete")
-
-        with self._condition:
-            while task_id in self._execution_futures:
-                if deadline is not None:
-                    remaining = self._remaining_time(deadline)
-                    if remaining <= 0:
-                        raise self._timeout_error(task_id, "complete")
-                    self._condition.wait(timeout=min(remaining, 0.1))
-                else:
-                    self._condition.wait()
-
-        record = self._backend.get(task_id)
-        if record is None:
-            raise PlatformError(ErrorCode.NOT_FOUND, f"Task '{task_id}' not found.")
-        if record.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
-            return self._read_terminal_response(task_id, consume=consume)
-        return TaskQueryResponse.from_record(record)
 
     def _read_terminal_response(
         self,
@@ -366,8 +355,7 @@ class TaskScheduler:
     def _worker_exited(self, thread: threading.Thread) -> None:
         with self._threads_lock:
             is_last_worker = all(
-                other is thread or not other.is_alive()
-                for other in self._threads
+                other is thread or not other.is_alive() for other in self._threads
             )
             if self._stop.is_set() and is_last_worker:
                 self._fail_pending_tasks()
@@ -400,12 +388,9 @@ class TaskScheduler:
             self._fail_task(task_id, exc)
             return
 
-        with self._condition:
-            self._execution_futures[task_id] = execution_future
-            execution_future.add_done_callback(
-                lambda completed: self._complete_task(task_id, completed)
-            )
-            self._condition.notify_all()
+        execution_future.add_done_callback(
+            lambda completed: self._complete_task(task_id, completed)
+        )
 
     @staticmethod
     def _execution_error_code(exc: Exception) -> ErrorCode:
@@ -430,9 +415,7 @@ class TaskScheduler:
 
     def _finish_execution(self, task_id: str) -> None:
         self._release_outstanding_slot(task_id)
-        with self._condition:
-            self._execution_futures.pop(task_id, None)
-            self._condition.notify_all()
+        self._notify_waiters()
 
     def _release_outstanding_slot(self, task_id: str) -> None:
         with self._outstanding_lock:
@@ -470,6 +453,10 @@ class TaskScheduler:
             log.debug("task_execution_completed task_id=%s", task_id)
         finally:
             self._finish_execution(task_id)
+
+    def _notify_waiters(self) -> None:
+        with self._condition:
+            self._condition.notify_all()
 
 
 __all__ = ["TaskScheduler"]

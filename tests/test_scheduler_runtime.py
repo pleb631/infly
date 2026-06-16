@@ -147,6 +147,23 @@ def test_terminal_query_can_consume_record() -> None:
     assert caught.value.code == ErrorCode.NOT_FOUND
 
 
+def test_terminal_query_can_consume_record_without_wait() -> None:
+    scheduler = _scheduler(SuccessStrategy())
+    scheduler.start()
+    try:
+        task_id = scheduler.submit(_request())
+        _wait_for_status(scheduler, task_id, TaskStatus.COMPLETED)
+        response = scheduler.query(task_id, consume=True)
+
+        with pytest.raises(PlatformError) as caught:
+            scheduler.query(task_id)
+    finally:
+        scheduler.stop()
+
+    assert response.status == TaskStatus.COMPLETED
+    assert caught.value.code == ErrorCode.NOT_FOUND
+
+
 def test_default_backend_uses_scheduler_terminal_retention_limit() -> None:
     scheduler = TaskScheduler(
         SuccessStrategy(),
@@ -196,6 +213,17 @@ def test_scheduler_stop_is_idempotent_before_start() -> None:
     scheduler.stop()
 
 
+def test_scheduler_start_is_idempotent_when_called_twice() -> None:
+    scheduler = _scheduler(SuccessStrategy())
+
+    scheduler.start()
+    scheduler.start()
+    try:
+        assert len(scheduler._threads) == 1
+    finally:
+        scheduler.stop()
+
+
 def test_scheduler_stop_fails_pending_tasks_and_releases_slots() -> None:
     scheduler = _scheduler(SuccessStrategy(), max_outstanding_tasks=1)
     task_id = scheduler.submit(_request("pending"))
@@ -221,6 +249,29 @@ def test_scheduler_start_is_rejected_after_stop() -> None:
         scheduler.start()
 
     assert caught.value.code == ErrorCode.INVALID_INPUT
+
+
+def test_query_wait_returns_failed_after_stop() -> None:
+    scheduler = _scheduler(SuccessStrategy(), max_outstanding_tasks=1)
+    task_id = scheduler.submit(_request("pending"))
+    result: dict[str, object] = {}
+    errors: list[BaseException] = []
+
+    def wait_for_terminal() -> None:
+        try:
+            result["response"] = scheduler.query(task_id, wait=True)
+        except BaseException as exc:  # pragma: no cover - defensive
+            errors.append(exc)
+
+    thread = threading.Thread(target=wait_for_terminal)
+    thread.start()
+    scheduler.stop()
+    thread.join(1)
+
+    assert errors == []
+    response = result["response"]
+    assert response.status == TaskStatus.FAILED
+    assert response.error_code == ErrorCode.WORKER_UNAVAILABLE
 
 
 def test_scheduler_stop_ignores_foreign_pending_backend_records() -> None:
