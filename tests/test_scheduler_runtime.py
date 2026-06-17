@@ -237,7 +237,7 @@ def test_scheduler_stop_fails_pending_tasks_and_releases_slots() -> None:
     with pytest.raises(PlatformError) as caught:
         scheduler.submit(_request("replacement"))
 
-    assert caught.value.code == ErrorCode.INVALID_INPUT
+    assert caught.value.code == ErrorCode.INVALID_STATE
 
 
 def test_scheduler_start_is_rejected_after_stop() -> None:
@@ -248,7 +248,7 @@ def test_scheduler_start_is_rejected_after_stop() -> None:
     with pytest.raises(PlatformError) as caught:
         scheduler.start()
 
-    assert caught.value.code == ErrorCode.INVALID_INPUT
+    assert caught.value.code == ErrorCode.INVALID_STATE
 
 
 def test_query_wait_returns_failed_after_stop() -> None:
@@ -370,7 +370,7 @@ def test_scheduler_stop_rejects_negative_timeout() -> None:
     with pytest.raises(PlatformError) as caught:
         scheduler.stop(timeout=-1)
 
-    assert caught.value.code == ErrorCode.INVALID_INPUT
+    assert caught.value.code == ErrorCode.INVALID_ARGUMENT
 
 
 def test_query_without_wait_returns_current_non_terminal_status() -> None:
@@ -609,6 +609,33 @@ def test_unexpected_execution_error_is_internal_and_releases_slot() -> None:
     second = scheduler.query(second_task_id)
     assert second.status == TaskStatus.FAILED
     assert second.error_code == ErrorCode.WORKER_UNAVAILABLE
+
+
+def test_worker_loop_survives_transient_pull_failure() -> None:
+    class PullFailsOnceBackend(InMemoryTaskBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed = False
+
+        def pull(self) -> str | None:
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("transient pull failure")
+            return super().pull()
+
+    scheduler = TaskScheduler(
+        SuccessStrategy(),
+        backend=PullFailsOnceBackend(),
+        scheduler_config=SchedulerConfig(num_workers=1),
+    )
+    scheduler.start()
+    try:
+        task_id = scheduler.submit(_request("survives-pull-failure"))
+        response = _wait_for_status(scheduler, task_id, TaskStatus.COMPLETED)
+    finally:
+        scheduler.stop()
+
+    assert response.status == TaskStatus.COMPLETED
 
 
 def test_submit_and_wait_raises_execution_failure() -> None:

@@ -104,9 +104,9 @@ def test_model_definition_cache_key_is_stable_for_equivalent_objects() -> None:
 @pytest.mark.parametrize(
     ("class_path", "expected_code", "expected_fragment"),
     [
-        ("not_a_module_and_class", ErrorCode.INVALID_INPUT, "class_path"),
-        (":ClassName", ErrorCode.INVALID_INPUT, "class_path"),
-        ("module:", ErrorCode.INVALID_INPUT, "class_path"),
+        ("not_a_module_and_class", ErrorCode.INVALID_CONFIGURATION, "class_path"),
+        (":ClassName", ErrorCode.INVALID_CONFIGURATION, "class_path"),
+        ("module:", ErrorCode.INVALID_CONFIGURATION, "class_path"),
         ("notarealmodule:SomeClass", ErrorCode.NOT_FOUND, "notarealmodule"),
         ("tests.support.fake_models:NotAClass", ErrorCode.NOT_FOUND, "NotAClass"),
         (

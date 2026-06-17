@@ -64,7 +64,7 @@ class TaskScheduler:
             if self._closed:
                 log.debug("scheduler_start_rejected reason=closed")
                 raise PlatformError(
-                    ErrorCode.INVALID_INPUT,
+                    ErrorCode.INVALID_STATE,
                     "Scheduler is closed and cannot be started again.",
                 )
             with self._threads_lock:
@@ -94,7 +94,7 @@ class TaskScheduler:
     def stop(self, timeout: float = 2.0) -> None:
         if timeout < 0:
             raise PlatformError(
-                ErrorCode.INVALID_INPUT,
+                ErrorCode.INVALID_ARGUMENT,
                 "timeout must be greater than or equal to zero.",
             )
         with self._lifecycle_lock:
@@ -150,7 +150,7 @@ class TaskScheduler:
                     request.model_name,
                 )
                 raise PlatformError(
-                    ErrorCode.INVALID_INPUT,
+                    ErrorCode.INVALID_STATE,
                     "Scheduler is closed and no longer accepts submissions.",
                 )
 
@@ -263,7 +263,7 @@ class TaskScheduler:
         if timeout_seconds is not None:
             if timeout_seconds < 0:
                 raise PlatformError(
-                    ErrorCode.INVALID_INPUT,
+                    ErrorCode.INVALID_ARGUMENT,
                     "timeout_seconds must be greater than or equal to zero.",
                 )
             deadline = time.monotonic() + timeout_seconds
@@ -344,10 +344,25 @@ class TaskScheduler:
         log.info(f"{thread_name} started")
         try:
             while True:
-                task_id = self._pull_task_or_none()
+                try:
+                    task_id = self._pull_task_or_none()
+                except Exception as exc:
+                    log.error(
+                        "worker_loop_pull_failed thread=%s error=%s",
+                        thread_name,
+                        exc,
+                        exc_info=(type(exc), exc, exc.__traceback__),
+                    )
+                    if self._stop.is_set():
+                        return
+                    time.sleep(_WAIT_POLL_INTERVAL_SECONDS)
+                    continue
                 if task_id is None:
                     return
-                self._run_task(task_id)
+                try:
+                    self._run_task(task_id)
+                except Exception as exc:
+                    self._handle_worker_loop_task_failure(task_id, exc)
         finally:
             self._worker_exited(threading.current_thread())
             log.info(f"{thread_name} stopped")
@@ -391,6 +406,45 @@ class TaskScheduler:
         execution_future.add_done_callback(
             lambda completed: self._complete_task(task_id, completed)
         )
+
+    def _handle_worker_loop_task_failure(
+        self,
+        task_id: str,
+        exc: Exception,
+    ) -> None:
+        log.error(
+            "worker_loop_task_failed task_id=%s error=%s",
+            task_id,
+            exc,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        try:
+            record = self._backend.get(task_id)
+        except Exception as lookup_exc:
+            log.error(
+                "worker_loop_task_lookup_failed task_id=%s error=%s",
+                task_id,
+                lookup_exc,
+                exc_info=(type(lookup_exc), lookup_exc, lookup_exc.__traceback__),
+            )
+            record = None
+        try:
+            if record is not None and record.status not in _TERMINAL_READ_STATUSES:
+                self._backend.update_status(
+                    task_id,
+                    TaskStatus.FAILED,
+                    error_code=ErrorCode.INTERNAL_ERROR,
+                    error_message=f"Worker loop failed: {exc}",
+                )
+        except Exception as update_exc:
+            log.error(
+                "worker_loop_task_update_failed task_id=%s error=%s",
+                task_id,
+                update_exc,
+                exc_info=(type(update_exc), update_exc, update_exc.__traceback__),
+            )
+        finally:
+            self._finish_execution(task_id)
 
     @staticmethod
     def _execution_error_code(exc: Exception) -> ErrorCode:

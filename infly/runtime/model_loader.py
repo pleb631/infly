@@ -22,7 +22,7 @@ def load_model(definition: ModelDefinition) -> ModelProtocol:
             definition.model_name,
         )
         raise PlatformError(
-            ErrorCode.INVALID_INPUT,
+            ErrorCode.INVALID_CONFIGURATION,
             f"Malformed class_path: '{definition.class_path}'. Expected format 'module:ClassName'.",
         )
     module_name, class_name = parts
