@@ -153,13 +153,30 @@ def test_load_model_reports_missing_internal_dependency_as_internal_error(
     assert "missing_dependency" in str(exc.value)
 
 
-def test_model_definition_keeps_reserved_worker_context_value() -> None:
+def test_model_definition_rejects_reserved_worker_context() -> None:
+    with pytest.raises(ValueError, match="worker_context"):
+        ModelDefinition(
+            model_name="echo",
+            class_path="tests.support.fake_models:EchoModel",
+            module_dict={"worker_context": {}},
+        )
+
+
+def test_model_definition_allows_runtime_worker_context_injection() -> None:
     definition = ModelDefinition(
         model_name="echo",
         class_path="tests.support.fake_models:EchoModel",
-        module_dict={"worker_context": {}},
+        module_dict={"gpu": 0},
     )
-    assert definition.module_dict == {"worker_context": {}}
+
+    runtime_definition = ModelDefinition.with_worker_context(
+        definition,
+        worker_context={"worker_id": "cpu_R0"},
+    )
+
+    assert runtime_definition.module_dict["worker_context"] == {"worker_id": "cpu_R0"}
+    assert runtime_definition.module_dict["gpu"] == 0
+    assert definition.module_dict == {"gpu": 0}
 
 
 def test_inference_service_reloads_replaced_model_definition() -> None:

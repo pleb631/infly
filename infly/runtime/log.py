@@ -39,7 +39,7 @@ class LoggingSettings:
     def __post_init__(self) -> None:
         object.__setattr__(self, "log_root", Path(self.log_root))
         object.__setattr__(self, "log_level", _resolve_log_level(self.log_level))
-
+        object.__setattr__(self, "save_days", int(self.save_days))
 
 _configured_logging_settings: LoggingSettings | None = None
 

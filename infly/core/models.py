@@ -1,10 +1,11 @@
 import base64
-from dataclasses import dataclass, field, fields, is_dataclass
+from collections import ChainMap
+from dataclasses import InitVar, dataclass, field, fields, is_dataclass
 import json
 from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 @dataclass(slots=True)
 class ModelDefinition:
@@ -13,6 +14,30 @@ class ModelDefinition:
     module_dict: Mapping[str, Any] = field(default_factory=dict)
     kwargs: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    _allow_reserved_worker_context: InitVar[bool] = False
+
+    def __post_init__(self, _allow_reserved_worker_context: bool) -> None:
+        if "worker_context" in self.module_dict and not _allow_reserved_worker_context:
+            raise ValueError("module_dict key 'worker_context' is reserved")
+
+    @classmethod
+    def with_worker_context(
+        cls,
+        definition: Self,
+        *,
+        worker_context: Mapping[str, Any],
+    ) -> Self:
+        return cls(
+            model_name=definition.model_name,
+            class_path=definition.class_path,
+            module_dict=ChainMap(
+                {"worker_context": dict(worker_context)},
+                definition.module_dict,
+            ),
+            kwargs=definition.kwargs,
+            metadata=definition.metadata,
+            _allow_reserved_worker_context=True,
+        )
 
     @property
     def model_key(self) -> str:

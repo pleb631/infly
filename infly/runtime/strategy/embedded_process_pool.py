@@ -4,7 +4,7 @@ import os
 import sys
 import threading
 import time
-from collections import ChainMap, defaultdict, deque
+from collections import defaultdict, deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from concurrent.futures import Future
@@ -528,12 +528,9 @@ class EmbeddedProcessPoolStrategy:
         for model_name in worker.model_names:
             definition = self._registry.get(model_name)
             child_registry.add(
-                ModelDefinition(
-                    model_name=definition.model_name,
-                    class_path=definition.class_path,
-                    module_dict=ChainMap({"worker_context": context}, definition.module_dict),
-                    kwargs=definition.kwargs,
-                    metadata=definition.metadata,
+                ModelDefinition.with_worker_context(
+                    definition,
+                    worker_context=context,
                 )
             )
         return child_registry
