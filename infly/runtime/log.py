@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from contextlib import contextmanager
 from contextvars import ContextVar
 from logging.handlers import QueueHandler, TimedRotatingFileHandler
@@ -9,8 +10,6 @@ from pathlib import Path
 from queue import Empty
 from threading import Lock, Thread
 from typing import Any, Callable
-
-from pydantic import BaseModel, ConfigDict
 
 DEFAULT_LOG_ROOT = Path("logs/infly")
 DEFAULT_LOG_LEVEL = logging.INFO
@@ -30,13 +29,16 @@ LogLevelValue = str | int
 LogRecordSink = Callable[[logging.LogRecord], None]
 
 
-class LoggingSettings(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
+@dataclass(frozen=True, slots=True)
+class LoggingSettings:
     log_root: Path = DEFAULT_LOG_ROOT
     log_level: int = DEFAULT_LOG_LEVEL
     save_days: int = DEFAULT_SAVE_DAYS
     log_format: str = DEFAULT_LOG_FORMAT
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "log_root", Path(self.log_root))
+        object.__setattr__(self, "log_level", _resolve_log_level(self.log_level))
 
 
 _configured_logging_settings: LoggingSettings | None = None

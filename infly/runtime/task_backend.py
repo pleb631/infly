@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import copy as _copy
 import datetime
 import heapq
 import threading
 import time
-from typing import Any
 
-from infly.core.contracts import TaskRecord, TaskStatus
+from infly.core.contracts import (
+    InferenceResult,
+    TaskRecord,
+    TaskStatus,
+)
 from infly.core.errors import ErrorCode
 from infly.core.ports import TaskBackend
 from infly.runtime.log import get_logger
@@ -27,14 +31,12 @@ class InMemoryTaskBackend:
         self._sequence = 0
         self._lock = threading.Lock()
 
-    @staticmethod
-    def _clone_record(record: TaskRecord) -> TaskRecord:
-        return record.model_copy(deep=True)
-
     def submit(self, record: TaskRecord, priority: int = 0) -> None:
         with self._lock:
             if record.task_id in self._records:
-                log.warning("task_submit_rejected task_id=%s reason=duplicate", record.task_id)
+                log.warning(
+                    "task_submit_rejected task_id=%s reason=duplicate", record.task_id
+                )
                 raise ValueError(f"Task '{record.task_id}' already exists.")
             self._records[record.task_id] = record
             try:
@@ -62,12 +64,14 @@ class InMemoryTaskBackend:
         log.info("task_pulled task_id=%s", task_id)
         return task_id
 
-    def get(self, task_id: str) -> TaskRecord | None:
+    def get(self, task_id: str, copy: bool = False) -> TaskRecord | None:
         with self._lock:
-            record = self._records.get(task_id)
-            if record is None:
-                return None
-            return self._clone_record(record)
+            if copy:
+                record = self._records.get(task_id)
+                if record is None:
+                    return None
+                return _copy.deepcopy(record)
+            return self._records.get(task_id)
 
     def read(
         self,
@@ -85,16 +89,16 @@ class InMemoryTaskBackend:
             if consume:
                 self._terminal_finished_at.pop(task_id, None)
                 self._read_terminal_tasks.discard(task_id)
-                return self._clone_record(self._records.pop(task_id))
+                return self._records.pop(task_id)
             self._read_terminal_tasks.add(task_id)
-            return self._clone_record(record)
+            return _copy.deepcopy(record)
 
     def update_status(
         self,
         task_id: str,
         status: TaskStatus,
         *,
-        result: dict[str, Any] | None = None,
+        result: InferenceResult | None = None,
         error_code: ErrorCode | None = None,
         error_message: str | None = None,
     ) -> TaskRecord:
@@ -102,14 +106,15 @@ class InMemoryTaskBackend:
             record = self._records.get(task_id)
             if record is None:
                 raise KeyError(task_id)
-            updated = record.model_copy(
-                update={
-                    "status": status,
-                    "result": result,
-                    "error_code": error_code,
-                    "error_message": error_message,
-                    "updated_at": datetime.datetime.now(datetime.timezone.utc),
-                }
+            updated = TaskRecord(
+                task_id=record.task_id,
+                request=record.request,
+                status=status,
+                result=result,
+                error_code=error_code,
+                error_message=error_message,
+                created_at=record.created_at,
+                updated_at=datetime.datetime.now(datetime.timezone.utc),
             )
             self._records[task_id] = updated
             if status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
@@ -158,7 +163,7 @@ class InMemoryTaskBackend:
 
     def list_all(self) -> list[TaskRecord]:
         with self._lock:
-            return [record.model_copy(deep=True) for record in self._records.values()]
+            return [_copy.deepcopy(record) for record in self._records.values()]
 
 
 __all__ = ["InMemoryTaskBackend", "TaskBackend"]

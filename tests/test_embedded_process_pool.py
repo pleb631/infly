@@ -1,9 +1,10 @@
 import logging
 from collections import deque
+from dataclasses import dataclass
 
 import pytest
 
-from infly.core.contracts import InferenceRequest
+from infly.core.contracts import InferenceRequest, InferenceResult
 from infly.core.errors import ErrorCode, PlatformError
 
 from infly.core.models import ModelDefinition
@@ -304,10 +305,7 @@ def test_worker_loop_applies_log_context_in_worker_layer(
     monkeypatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class FakeResult:
-        def model_dump(self) -> dict[str, str]:
-            return {"result": "ok"}
-
+    @dataclass
     class FakeQueue:
         def __init__(self, items: list[object] | None = None) -> None:
             self.items = deque(items or [])
@@ -326,12 +324,15 @@ def test_worker_loop_applies_log_context_in_worker_layer(
         def preload(self) -> None:
             logging.getLogger("fake.service").info("service_preload_called")
 
-        def predict(self, request: InferenceRequest) -> FakeResult:
+        def predict(self, request: InferenceRequest) -> InferenceResult:
             logging.getLogger("fake.service").info(
                 "service_predict_called request_id=%s",
                 request.request_id,
             )
-            return FakeResult()
+            return InferenceResult(
+                request_id=request.request_id,
+                data={"result": "ok"},
+            )
 
     import infly.runtime.strategy.embedded_process_pool as pool_module
 
@@ -349,12 +350,12 @@ def test_worker_loop_applies_log_context_in_worker_layer(
 
     task_queue = FakeQueue(
         [
-            {
-                "request_id": "req-1",
-                "model_name": "echo",
-                "payload": {"text": "hello"},
-                "caller": "test",
-            },
+            InferenceRequest(
+                request_id="req-1",
+                model_name="echo",
+                payload={"text": "hello"},
+                caller="test",
+            ),
             None,
         ]
     )
@@ -388,7 +389,8 @@ def test_worker_loop_applies_log_context_in_worker_layer(
         and record.log_name == "worker-1"
         for record in caplog.records
     )
-    assert lifecycle_queue.put_items[0]["kind"] == "READY"
-    assert result_queue.put_items[0]["ok"] is True
+    assert lifecycle_queue.put_items[0].kind == "READY"
+    assert result_queue.put_items[0].ok is True
+    assert result_queue.put_items[0].payload.request_id == "req-1"
 
 

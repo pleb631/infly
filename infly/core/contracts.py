@@ -1,26 +1,26 @@
 from __future__ import annotations
 
 import datetime
+from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Self
-from pydantic import BaseModel, Field
-
+from typing import Any, Mapping, Self
 from infly.core.errors import ErrorCode
 
 
-class InferenceRequest(BaseModel):
+
+@dataclass(slots=True, frozen=True)
+class InferenceRequest:
     request_id: str
     model_name: str
-    payload: dict[str, Any]
+    payload: Mapping[str, Any]
     caller: str
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
-
-
-class InferenceResult(BaseModel):
+@dataclass(slots=True, frozen=True)
+class InferenceResult:
     request_id: str
-    data: dict[str, Any] = Field(default_factory=dict)
-    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    data: Mapping[str, Any] = field(default_factory=dict)
+    diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
 class TaskStatus(StrEnum):
     PENDING = "PENDING"
@@ -28,25 +28,28 @@ class TaskStatus(StrEnum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
 
-class TaskRecord(BaseModel):
+
+@dataclass(slots=True)
+class TaskRecord:
     task_id: str
     request: InferenceRequest
     status: TaskStatus = TaskStatus.PENDING
-    result: dict[str, Any] | None = None
+    result: InferenceResult | None = None
     error_code: ErrorCode | None = None
     error_message: str | None = None
-    created_at: datetime.datetime = Field(
+    created_at: datetime.datetime = field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC)
     )
-    updated_at: datetime.datetime = Field(
+    updated_at: datetime.datetime = field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC)
     )
 
 
-class TaskQueryResponse(BaseModel):
+@dataclass(slots=True, frozen=True)
+class TaskQueryResponse:
     task_id: str
     status: TaskStatus
-    result: dict[str, Any] | None = None
+    result: InferenceResult | None = None
     error_code: ErrorCode | None = None
     error_message: str | None = None
 
@@ -59,6 +62,7 @@ class TaskQueryResponse(BaseModel):
             error_code=record.error_code,
             error_message=record.error_message,
         )
+
 
 __all__ = [
     "InferenceRequest",

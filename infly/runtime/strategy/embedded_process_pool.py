@@ -4,10 +4,11 @@ import os
 import sys
 import threading
 import time
-from collections import defaultdict, deque
+from collections import ChainMap, defaultdict, deque
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from concurrent.futures import Future
 from multiprocessing import get_context, Queue
-from pydantic import BaseModel, Field
 from queue import Empty
 from typing import Any
 from setproctitle import setproctitle
@@ -54,6 +55,25 @@ def _restore_parent_import_path(
         sys.path = missing + sys.path
 
 
+@dataclass(slots=True, frozen=True)
+class WorkerLifecycleMessage:
+    kind: str
+    worker_id: str
+    generation: int
+    error_message: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class WorkerResultMessage:
+    ok: bool
+    request_id: str
+    worker_id: str
+    generation: int
+    payload: InferenceResult | None = None
+    error_code: ErrorCode | object | None = None
+    error_message: str | None = None
+
+
 def _worker_loop(
     worker_id: str,
     generation: int,
@@ -61,11 +81,11 @@ def _worker_loop(
     result_queue: Queue,
     lifecycle_queue: Queue,
     registry: ModelRegistry,
-    environment: dict[str, str],
+    environment: Mapping[str, str],
     device: str,
     parent_sys_path: list[str],
     parent_cwd: str,
-    log_queue: Any,
+    log_queue: object,
     log_settings: LoggingSettings,
 ) -> None:
 
@@ -87,11 +107,11 @@ def _worker_loop(
         with log_context(name=worker_id, category="worker"):
             service.preload()
         lifecycle_queue.put(
-            {
-                "kind": "READY",
-                "worker_id": worker_id,
-                "generation": generation,
-            }
+            WorkerLifecycleMessage(
+                kind="READY",
+                worker_id=worker_id,
+                generation=generation,
+            )
         )
         log.info(
             "worker_ready worker_id=%s generation=%s",
@@ -107,18 +127,18 @@ def _worker_loop(
             exc_info=True,
         )
         lifecycle_queue.put(
-            {
-                "kind": "STARTUP_FAILED",
-                "worker_id": worker_id,
-                "generation": generation,
-                "error_message": str(exc),
-            }
+            WorkerLifecycleMessage(
+                kind="STARTUP_FAILED",
+                worker_id=worker_id,
+                generation=generation,
+                error_message=str(exc),
+            )
         )
         return
 
     while True:
-        item = task_queue.get()
-        if item is None:
+        request = task_queue.get()
+        if request is None:
             log.info(
                 "worker_stopped worker_id=%s generation=%s",
                 worker_id,
@@ -126,7 +146,6 @@ def _worker_loop(
             )
             return
         try:
-            request = InferenceRequest.model_validate(item)
             log.debug(
                 "worker_request_started worker_id=%s generation=%s request_id=%s model=%s",
                 worker_id,
@@ -137,13 +156,13 @@ def _worker_loop(
             with log_context(name=worker_id, category="worker"):
                 result = service.predict(request)
             result_queue.put(
-                {
-                    "ok": True,
-                    "payload": result.model_dump(),
-                    "request_id": request.request_id,
-                    "worker_id": worker_id,
-                    "generation": generation,
-                }
+                WorkerResultMessage(
+                    ok=True,
+                    payload=result,
+                    request_id=request.request_id,
+                    worker_id=worker_id,
+                    generation=generation,
+                )
             )
             log.debug(
                 "worker_request_completed worker_id=%s generation=%s request_id=%s",
@@ -152,30 +171,30 @@ def _worker_loop(
                 request.request_id,
             )
         except Exception as exc:
-            request_id = item.get("request_id") if isinstance(item, dict) else None
             log.error(
                 "worker_request_failed worker_id=%s generation=%s request_id=%s error=%s",
                 worker_id,
                 generation,
-                request_id,
+                request.request_id,
                 exc,
                 exc_info=True,
             )
             result_queue.put(
-                {
-                    "ok": False,
-                    "error_code": _dump_error_code(
+                WorkerResultMessage(
+                    ok=False,
+                    error_code=_dump_error_code(
                         getattr(exc, "code", ErrorCode.INTERNAL_ERROR)
                     ),
-                    "error_message": str(exc),
-                    "request_id": request_id,
-                    "worker_id": worker_id,
-                    "generation": generation,
-                }
+                    error_message=str(exc),
+                    request_id=request.request_id,
+                    worker_id=worker_id,
+                    generation=generation,
+                )
             )
 
 
-class _WorkerState(BaseModel):
+@dataclass(slots=True)
+class _WorkerState:
     worker_id: str
     index: int
     group: WorkerGroup
@@ -186,7 +205,7 @@ class _WorkerState(BaseModel):
     process: Any = None
     alive: bool = False
     outstanding: int = 0
-    restart_times: deque[float] = Field(default_factory=deque)
+    restart_times: deque[float] = field(default_factory=deque)
     next_restart_at: float | None = None
 
 
@@ -367,7 +386,7 @@ class EmbeddedProcessPoolStrategy:
                     self._assignments[request.request_id] = assignment
                     worker.outstanding += 1
                     try:
-                        worker.task_queue.put_nowait(request.model_dump())
+                        worker.task_queue.put_nowait(request)
                     except Exception as exc:
                         worker.outstanding -= 1
                         self._assignments.pop(request.request_id, None)
@@ -481,7 +500,7 @@ class EmbeddedProcessPoolStrategy:
                 self._result_queue,
                 worker.lifecycle_queue,
                 child_registry,
-                dict(worker.group.environment),
+                worker.group.environment,
                 worker.group.device,
                 list(sys.path),
                 os.getcwd(),
@@ -508,12 +527,13 @@ class EmbeddedProcessPoolStrategy:
         }
         for model_name in worker.model_names:
             definition = self._registry.get(model_name)
-            module_dict = dict(definition.module_dict)
-            module_dict["worker_context"] = dict(context)
             child_registry.add(
-                ModelDefinition.model_construct(
-                    **definition.model_dump(exclude={"module_dict"}),
-                    module_dict=module_dict,
+                ModelDefinition(
+                    model_name=definition.model_name,
+                    class_path=definition.class_path,
+                    module_dict=ChainMap({"worker_context": context}, definition.module_dict),
+                    kwargs=definition.kwargs,
+                    metadata=definition.metadata,
                 )
             )
         return child_registry
@@ -551,20 +571,17 @@ class EmbeddedProcessPoolStrategy:
                         f"Worker '{worker.worker_id}' exited during startup",
                     )
 
-        if (
-            message.get("kind") != "READY"
-            or message.get("generation") != worker.generation
-        ):
+        if message.kind != "READY" or message.generation != worker.generation:
             log.error(
                 "worker_startup_failed worker_id=%s generation=%s error=%s",
                 worker.worker_id,
                 worker.generation,
-                message.get("error_message", "unknown error"),
+                message.error_message or "unknown error",
             )
             raise PlatformError(
                 ErrorCode.INTERNAL_ERROR,
                 f"Worker '{worker.worker_id}' startup failed: "
-                f"{message.get('error_message', 'unknown error')}",
+                f"{message.error_message or 'unknown error'}",
             )
         worker.alive = True
         log.info(
@@ -584,7 +601,7 @@ class EmbeddedProcessPoolStrategy:
         if manager is not None:
             manager.stop()
 
-    def _close_queue(self, queue: Any | None) -> None:
+    def _close_queue(self, queue: object | None) -> None:
         if queue is None:
             return
         close = getattr(queue, "close", None)
@@ -690,13 +707,8 @@ class EmbeddedProcessPoolStrategy:
             except Empty:
                 continue
 
-            request_id = item.get("request_id")
-            assignment = (
-                item.get("worker_id"),
-                item.get("generation"),
-            )
-            if request_id is None:
-                continue
+            request_id = item.request_id
+            assignment = (item.worker_id, item.generation)
 
             with self._lock:
                 if self._assignments.get(request_id) != assignment:
@@ -714,8 +726,8 @@ class EmbeddedProcessPoolStrategy:
             if future is None or future.done():
                 continue
             try:
-                if item.get("ok"):
-                    future.set_result(InferenceResult.model_validate(item["payload"]))
+                if item.ok:
+                    future.set_result(item.payload)
                     log.debug(
                         "worker_result_completed request_id=%s worker_id=%s generation=%s",
                         request_id,
@@ -729,15 +741,12 @@ class EmbeddedProcessPoolStrategy:
                         request_id,
                         assignment[0],
                         assignment[1],
-                        item.get("error_message", "Unknown worker error"),
+                        item.error_message or "Unknown worker error",
                     )
                     future.set_exception(
                         PlatformError(
-                            _load_error_code(item.get("error_code")),
-                            item.get(
-                                "error_message",
-                                "Unknown worker error",
-                            ),
+                            _load_error_code(item.error_code),
+                            item.error_message or "Unknown worker error",
                         )
                     )
             except Exception as exc:

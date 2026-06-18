@@ -364,3 +364,17 @@ def test_routing_queue_listener_respects_runtime_log_level_changes(
             save_days=old_settings.save_days,
             log_format=old_settings.log_format,
         )
+
+
+def test_logging_settings_coerces_direct_constructor_inputs() -> None:
+    settings = runtime_log.LoggingSettings(
+        log_root="logs/custom",
+        log_level="warning",
+        save_days="7",
+        log_format="%(message)s",
+    )
+
+    assert settings.log_root == runtime_log.Path("logs/custom")
+    assert settings.log_level == logging.WARNING
+    assert settings.save_days == 7
+    assert settings.log_format == "%(message)s"

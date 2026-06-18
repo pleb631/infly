@@ -113,7 +113,8 @@ def test_scheduler_completes_submitted_task() -> None:
         scheduler.stop()
 
     assert response.status == TaskStatus.COMPLETED
-    assert response.result["data"] == {"echo": "ok"}  # type: ignore[index]
+    assert response.result is not None
+    assert response.result.data == {"echo": "ok"}
 
 
 def test_terminal_query_retains_record_by_default() -> None:
@@ -129,6 +130,25 @@ def test_terminal_query_retains_record_by_default() -> None:
     assert first.status == TaskStatus.COMPLETED
     assert second == first
     assert scheduler.backend.get(task_id) is not None
+
+
+def test_terminal_query_returns_isolated_copy() -> None:
+    scheduler = _scheduler(SuccessStrategy())
+    scheduler.start()
+    try:
+        task_id = scheduler.submit(_request())
+        first = scheduler.query(task_id, wait=True)
+        assert first.result is not None
+        first.result.data["mutated"] = True
+
+        second = scheduler.query(task_id)
+    finally:
+        scheduler.stop()
+
+    assert second.result is not None
+    assert "mutated" not in second.result.data
+    assert scheduler.backend.get(task_id).result is not None
+    assert "mutated" not in scheduler.backend.get(task_id).result.data  # type: ignore[union-attr]
 
 
 def test_terminal_query_can_consume_record() -> None:
@@ -566,14 +586,14 @@ def test_query_wait_raises_not_found_when_task_disappears_during_wait() -> None:
             super().__init__()
             self._get_counts: dict[str, int] = {}
 
-        def get(self, task_id: str):
+        def get(self, task_id: str, copy: bool = False):
             count = self._get_counts.get(task_id, 0)
             self._get_counts[task_id] = count + 1
             if count >= 1:
                 with self._lock:
                     self._records.pop(task_id, None)
                 return None
-            return super().get(task_id)
+            return super().get(task_id, copy=copy)
 
     scheduler = TaskScheduler(
         SuccessStrategy(),

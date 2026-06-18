@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy as _copy
 import threading
 import time
 import uuid
@@ -223,7 +224,12 @@ class TaskScheduler:
             raise
 
         if terminal.status == TaskStatus.COMPLETED:
-            return InferenceResult.model_validate(terminal.result)
+            if terminal.result is None:
+                raise PlatformError(
+                    ErrorCode.INTERNAL_ERROR,
+                    "Task completed without a result.",
+                )
+            return terminal.result
         raise PlatformError(
             terminal.error_code or ErrorCode.INTERNAL_ERROR,
             terminal.error_message or "Task execution failed.",
@@ -237,14 +243,14 @@ class TaskScheduler:
         timeout_seconds: float | None = None,
         consume: bool = False,
     ) -> TaskQueryResponse:
-        record = self._backend.get(task_id)
+        record = self._backend.get(task_id, copy=False)
         if record is None:
             log.warning("task_query_failed task_id=%s reason=not_found", task_id)
             raise PlatformError(ErrorCode.NOT_FOUND, f"Task '{task_id}' not found.")
         if record.status in _TERMINAL_READ_STATUSES:
             return self._read_terminal_response(task_id, consume=consume)
         if not wait:
-            return TaskQueryResponse.from_record(record)
+            return TaskQueryResponse.from_record(_copy.deepcopy(record))
 
         return self._wait_for_terminal_response(
             task_id,
@@ -270,7 +276,7 @@ class TaskScheduler:
 
         with self._condition:
             while True:
-                record = self._backend.get(task_id)
+                record = self._backend.get(task_id, copy=False)
                 if record is None:
                     raise PlatformError(
                         ErrorCode.NOT_FOUND, f"Task '{task_id}' not found."
@@ -378,7 +384,7 @@ class TaskScheduler:
                 self._threads.remove(thread)
 
     def _run_task(self, task_id: str) -> None:
-        record = self._backend.get(task_id)
+        record = self._backend.get(task_id, copy=False)
         if record is None:
             log.warning("task_execution_skipped task_id=%s reason=not_found", task_id)
             return
@@ -419,7 +425,7 @@ class TaskScheduler:
             exc_info=(type(exc), exc, exc.__traceback__),
         )
         try:
-            record = self._backend.get(task_id)
+            record = self._backend.get(task_id, copy=False)
         except Exception as lookup_exc:
             log.error(
                 "worker_loop_task_lookup_failed task_id=%s error=%s",
@@ -502,7 +508,7 @@ class TaskScheduler:
             self._backend.update_status(
                 task_id,
                 TaskStatus.COMPLETED,
-                result=result.model_dump(),
+                result=result,
             )
             log.debug("task_execution_completed task_id=%s", task_id)
         finally:

@@ -1,26 +1,18 @@
 import base64
+from dataclasses import dataclass, field, fields, is_dataclass
 import json
 from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
-
-
-class ModelDefinition(BaseModel):
+@dataclass(slots=True)
+class ModelDefinition:
     model_name: str
     class_path: str
-    module_dict: dict[str, Any] = Field(default_factory=dict)
-    kwargs: dict[str, Any] = Field(default_factory=dict)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("module_dict")
-    @classmethod
-    def reject_reserved_worker_context(cls, value: dict[str, Any]) -> dict[str, Any]:
-        if "worker_context" in value:
-            raise ValueError("module_dict key 'worker_context' is reserved")
-        return value
+    module_dict: Mapping[str, Any] = field(default_factory=dict)
+    kwargs: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def model_key(self) -> str:
@@ -67,10 +59,13 @@ def _normalize_cache_value(value: Any, *, _seen: set[int] | None = None) -> Any:
     if isinstance(value, bytearray):
         return {"__bytes__": base64.b64encode(bytes(value)).decode("ascii")}
 
-    if isinstance(value, BaseModel):
+    if is_dataclass(value) and not isinstance(value, type):
         return {
-            "__model__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
-            "fields": _normalize_cache_value(value.model_dump(mode="python"), _seen=_seen),
+            "__dataclass__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
+            "fields": _normalize_cache_value(
+                {field.name: getattr(value, field.name) for field in fields(value)},
+                _seen=_seen,
+            ),
         }
 
     value_id = id(value)

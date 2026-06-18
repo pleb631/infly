@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future
+from collections.abc import Mapping
 from typing import Any, Protocol
 
 from infly.core.contracts import (
@@ -13,10 +14,10 @@ from infly.core.errors import ErrorCode
 
 
 class ModelProtocol(Protocol):
-    def __init__(self, module_dict: dict[str, Any], **kwargs: Any) -> None:
+    def __init__(self, module_dict: Mapping[str, Any], **kwargs: Any) -> None:
         ...
 
-    def predict(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def predict(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         ...
 
 
@@ -34,7 +35,7 @@ class TaskBackend(Protocol):
     def pull(self) -> str | None:
         ...
 
-    def get(self, task_id: str) -> TaskRecord | None:
+    def get(self, task_id: str, copy: bool = False) -> TaskRecord | None:
         ...
 
     def read(
@@ -50,7 +51,7 @@ class TaskBackend(Protocol):
         task_id: str,
         status: TaskStatus,
         *,
-        result: dict[str, Any] | None = None,
+        result: InferenceResult | None = None,
         error_code: ErrorCode | None = None,
         error_message: str | None = None,
     ) -> TaskRecord:
