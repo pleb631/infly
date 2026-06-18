@@ -10,7 +10,7 @@ from infly.runtime.registry import ModelRegistry
 from infly.runtime.service import InferenceService
 
 
-def test_loader_builds_model_with_module_dict_and_kwargs() -> None:
+def test_loader_builds_model_class_with_module_dict_and_kwargs() -> None:
     registry = ModelRegistry()
     definition = ModelDefinition(
         model_name="echo",
@@ -24,6 +24,20 @@ def test_loader_builds_model_with_module_dict_and_kwargs() -> None:
 
     assert loaded.module_dict == {"gpu": 0}
     assert loaded.kwargs == {"backend": "onnx"}
+
+
+def test_loader_builds_model_factory_with_module_dict_and_kwargs() -> None:
+    definition = ModelDefinition(
+        model_name="echo",
+        class_path="tests.support.fake_models:build_echo_model",
+        module_dict={"gpu": 1},
+        kwargs={"backend": "torch", "device": "cuda:0"},
+    )
+
+    loaded = load_model(definition)
+
+    assert loaded.module_dict == {"gpu": 1}
+    assert loaded.kwargs == {"backend": "torch", "device": "cuda:0"}
 
 
 def test_model_registry_get_missing_raises_platform_error() -> None:
@@ -104,10 +118,14 @@ def test_model_definition_cache_key_is_stable_for_equivalent_objects() -> None:
     ("class_path", "expected_code", "expected_fragment"),
     [
         ("not_a_module_and_class", ErrorCode.INVALID_CONFIGURATION, "class_path"),
-        (":ClassName", ErrorCode.INVALID_CONFIGURATION, "class_path"),
+        (":SymbolName", ErrorCode.INVALID_CONFIGURATION, "class_path"),
         ("module:", ErrorCode.INVALID_CONFIGURATION, "class_path"),
         ("notarealmodule:SomeClass", ErrorCode.NOT_FOUND, "notarealmodule"),
-        ("tests.support.fake_models:NotAClass", ErrorCode.NOT_FOUND, "NotAClass"),
+        (
+            "tests.support.fake_models:NotAClass",
+            ErrorCode.NOT_FOUND,
+            "Attribute 'NotAClass'",
+        ),
         (
             "tests.support.fake_models:FailingModel",
             ErrorCode.INTERNAL_ERROR,
@@ -128,6 +146,34 @@ def test_load_model_invalid_reference_raises_platform_error(
         load_model(definition)
     assert exc.value.code == expected_code
     assert expected_fragment in str(exc.value)
+
+
+def test_load_model_rejects_non_callable_symbol() -> None:
+    definition = ModelDefinition(
+        model_name="bad",
+        class_path="tests.support.fake_models:NOT_CALLABLE_SYMBOL",
+    )
+
+    with pytest.raises(PlatformError) as exc:
+        load_model(definition)
+
+    assert exc.value.code == ErrorCode.INVALID_CONFIGURATION
+    assert "must be a callable" in str(exc.value)
+
+
+def test_load_model_rejects_factory_return_without_predict() -> None:
+    definition = ModelDefinition(
+        model_name="bad",
+        class_path="tests.support.fake_models:build_invalid_model",
+        module_dict={"gpu": 0},
+        kwargs={"backend": "onnx"},
+    )
+
+    with pytest.raises(PlatformError) as exc:
+        load_model(definition)
+
+    assert exc.value.code == ErrorCode.INVALID_CONFIGURATION
+    assert "predict(payload)" in str(exc.value)
 
 
 def test_load_model_reports_missing_internal_dependency_as_internal_error(

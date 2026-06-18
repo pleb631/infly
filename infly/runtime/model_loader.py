@@ -1,12 +1,18 @@
+from collections.abc import Callable
 from importlib import import_module
-from typing import cast
+from typing import Any, cast
 
 from infly.core.errors import ErrorCode, PlatformError
 from infly.core.models import ModelDefinition
-from infly.core.ports import ModelProtocol
+from infly.core.ports import ModelFactory, ModelProtocol
 
 from infly.runtime.log import get_logger
 log = get_logger()
+
+
+def _is_model_instance(candidate: object) -> bool:
+    predict = getattr(candidate, "predict", None)
+    return callable(predict)
 
 
 def load_model(definition: ModelDefinition) -> ModelProtocol:
@@ -23,9 +29,9 @@ def load_model(definition: ModelDefinition) -> ModelProtocol:
         )
         raise PlatformError(
             ErrorCode.INVALID_CONFIGURATION,
-            f"Malformed class_path: '{definition.class_path}'. Expected format 'module:ClassName'.",
+            f"Malformed class_path: '{definition.class_path}'. Expected format 'module:SymbolName'.",
         )
-    module_name, class_name = parts
+    module_name, symbol_name = parts
     try:
         module = import_module(module_name)
     except ModuleNotFoundError as exc:
@@ -50,21 +56,32 @@ def load_model(definition: ModelDefinition) -> ModelProtocol:
             f"Module '{module_name}' not found for class_path '{definition.class_path}'.",
         ) from exc
     try:
-        model_class = cast(type[ModelProtocol], getattr(module, class_name))
+        factory = cast(Callable[..., Any], getattr(module, symbol_name))
     except AttributeError as exc:
         log.error(
-            "model_load_failed model=%s class=%s error=%s",
+            "model_load_failed model=%s symbol=%s error=%s",
             definition.model_name,
-            class_name,
+            symbol_name,
             exc,
             exc_info=True,
         )
         raise PlatformError(
             ErrorCode.NOT_FOUND,
-            f"Class '{class_name}' not found in module '{module_name}' for class_path '{definition.class_path}'.",
+            f"Attribute '{symbol_name}' not found in module '{module_name}' for class_path '{definition.class_path}'.",
         ) from exc
+    if not callable(factory):
+        log.error(
+            "model_load_rejected model=%s symbol=%s reason=not_callable",
+            definition.model_name,
+            symbol_name,
+        )
+        raise PlatformError(
+            ErrorCode.INVALID_CONFIGURATION,
+            f"Attribute '{symbol_name}' in module '{module_name}' for class_path "
+            f"'{definition.class_path}' must be a callable that returns ModelProtocol.",
+        )
     try:
-        model = model_class(definition.module_dict, **definition.kwargs)
+        model = cast(ModelFactory, factory)(definition.module_dict, **definition.kwargs)
     except Exception as exc:
         log.error(
             "model_load_failed model=%s class_path=%s error=%s",
@@ -77,6 +94,18 @@ def load_model(definition: ModelDefinition) -> ModelProtocol:
             ErrorCode.INTERNAL_ERROR,
             f"Model '{definition.model_name}' failed to initialize: {exc}",
         ) from exc
+    if not _is_model_instance(model):
+        log.error(
+            "model_load_rejected model=%s symbol=%s reason=invalid_model_instance",
+            definition.model_name,
+            symbol_name,
+        )
+        raise PlatformError(
+            ErrorCode.INVALID_CONFIGURATION,
+            f"Callable '{symbol_name}' in module '{module_name}' for class_path "
+            f"'{definition.class_path}' must return an object with a callable "
+            "predict(payload) method.",
+        )
     log.info("model_load_completed model=%s", definition.model_name)
     return cast(ModelProtocol, model)
 

@@ -14,10 +14,16 @@ from infly.core.errors import ErrorCode
 
 
 class ModelProtocol(Protocol):
-    def __init__(self, module_dict: Mapping[str, Any], **kwargs: Any) -> None:
+    def predict(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         ...
 
-    def predict(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+
+class ModelFactory(Protocol):
+    def __call__(
+        self,
+        module_dict: Mapping[str, Any],
+        **kwargs: Any,
+    ) -> ModelProtocol:
         ...
 
 
@@ -27,6 +33,7 @@ class ExecutionStrategy(Protocol):
 
     def close(self) -> None:
         ...
+
 
 class TaskBackend(Protocol):
     def submit(self, record: TaskRecord, priority: int = 0) -> None:
@@ -63,6 +70,7 @@ class TaskBackend(Protocol):
 
 __all__ = [
     "ExecutionStrategy",
+    "ModelFactory",
     "ModelProtocol",
     "TaskBackend",
 ]

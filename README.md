@@ -36,7 +36,7 @@ uv sync
 ## 核心对象
 
 - `ModelDefinition`
-  定义模型名、`class_path`、构造参数和元数据
+  定义模型名、指向类或工厂函数的 `class_path`、构造参数和元数据
 - `ModelRegistry`
   负责模型定义的注册、替换和查找
 - `InferenceRequest`
@@ -77,10 +77,11 @@ uv sync
 
 ### 1. 定义模型
 
-模型类需要满足两个约定：
+运行时最终需要一个模型实例，并满足以下约定：
 
-- `__init__(module_dict, **kwargs)`
-- `predict(payload) -> Mapping[str, Any]`
+- 模型实例需要实现 `predict(payload) -> Mapping[str, Any]`
+- `class_path` 指向的模块符号可以是类或工厂函数，并且应接收
+  `module_dict` 与 `**kwargs` 后返回该模型实例
 
 ```python
 from collections.abc import Mapping
@@ -101,7 +102,7 @@ class EchoModel:
 
 ### 2. 注册模型
 
-`class_path` 使用 `module:ClassName` 格式。
+`class_path` 使用 `module:SymbolName` 格式，可指向类或工厂函数。
 
 ```python
 from infly.core.models import ModelDefinition
@@ -116,6 +117,30 @@ registry.add(
         module_dict={"gpu": 0},
         kwargs={"prefix": "[demo] "},
         metadata={"team": "search"},
+    )
+)
+```
+
+保留现有类写法的同时，也支持显式工厂函数：
+
+```python
+from collections.abc import Mapping
+from typing import Any
+
+
+def build_echo_model(
+    module_dict: Mapping[str, Any],
+    **kwargs: Any,
+) -> EchoModel:
+    return EchoModel(module_dict, **kwargs)
+
+
+registry.add(
+    ModelDefinition(
+        model_name="echo-factory",
+        class_path="my_models:build_echo_model",
+        module_dict={"gpu": 1},
+        kwargs={"prefix": "[factory] "},
     )
 )
 ```

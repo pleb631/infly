@@ -16,6 +16,20 @@ class EchoModel:
         }
 
 
+def build_echo_model(module_dict: Mapping[str, Any], **kwargs: Any) -> EchoModel:
+    return EchoModel(module_dict, **kwargs)
+
+
+NOT_CALLABLE_SYMBOL = {"kind": "not-callable"}
+
+
+def build_invalid_model(
+    module_dict: Mapping[str, Any],
+    **kwargs: Any,
+) -> object:
+    return {"module_dict": dict(module_dict), "kwargs": dict(kwargs)}
+
+
 class FailingModel:
     """Model that raises during construction to simulate startup failure."""
 
