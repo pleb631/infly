@@ -3,30 +3,30 @@ import threading
 import pytest
 from concurrent.futures import Future
 
-from infly.core.contracts import InferenceRequest, InferenceResult, TaskStatus
+from infly.core.contracts import TaskRequest, TaskResult, TaskStatus
 from infly.core.errors import ErrorCode, PlatformError
-from infly.core.models import ModelDefinition
+from infly.core.handlers import HandlerDefinition
 from infly.runtime.config import SchedulerConfig, WorkerGroup
-from infly.runtime.registry import ModelRegistry
+from infly.runtime.registry import HandlerRegistry
 from infly.runtime.scheduler import TaskScheduler
-from infly.runtime.strategy.embedded_process_pool import EmbeddedProcessPoolStrategy
+from infly.runtime.strategy.process_pool import ProcessPoolStrategy
 
 
-def _registry(*definitions: ModelDefinition) -> ModelRegistry:
-    registry = ModelRegistry()
+def _registry(*definitions: HandlerDefinition) -> HandlerRegistry:
+    registry = HandlerRegistry()
     for definition in definitions:
         registry.add(definition)
     return registry
 
 
 def _request(
-    request_id: str,
-    model_name: str = "echo",
-) -> InferenceRequest:
-    return InferenceRequest(
-        request_id=request_id,
-        model_name=model_name,
-        payload={"text": request_id},
+    task_key: str,
+    handler_name: str = "echo",
+) -> TaskRequest:
+    return TaskRequest(
+        task_key=task_key,
+        handler_name=handler_name,
+        input={"text": task_key},
         caller="integration",
     )
 
@@ -40,8 +40,8 @@ class ConcurrentBlockingStrategy:
         self.first_started = threading.Event()
         self.both_started = threading.Event()
 
-    def execute(self, request: InferenceRequest) -> Future[InferenceResult]:
-        future: Future[InferenceResult] = Future()
+    def execute(self, request: TaskRequest) -> Future[TaskResult]:
+        future: Future[TaskResult] = Future()
 
         with self._lock:
             self.running += 1
@@ -55,9 +55,9 @@ class ConcurrentBlockingStrategy:
             with self._lock:
                 self.running -= 1
             future.set_result(
-                InferenceResult(
-                    request_id=request.request_id,
-                    data={"request_id": request.request_id},
+                TaskResult(
+                    task_key=request.task_key,
+                    output={"task_key": request.task_key},
                 )
             )
 
@@ -69,11 +69,11 @@ class ConcurrentBlockingStrategy:
 
 
 def test_submit_and_wait_runs_through_embedded_pool() -> None:
-    pool = EmbeddedProcessPoolStrategy(
+    pool = ProcessPoolStrategy(
         _registry(
-            ModelDefinition(
-                model_name="echo",
-                class_path="tests.support.fake_models:ContextModel",
+            HandlerDefinition(
+                handler_name="echo",
+                entrypoint="tests.support.fake_handlers:ContextHandler",
             )
         ),
         [WorkerGroup(name="gpu", device="cuda:7")],
@@ -88,21 +88,21 @@ def test_submit_and_wait_runs_through_embedded_pool() -> None:
     finally:
         scheduler.stop()
 
-    assert result.request_id == "hello"
-    assert result.data["payload"]["text"] == "hello"
-    assert result.data["worker_context"]["group_name"] == "gpu"
-    assert result.data["worker_context"]["device"] == "cuda:7"
-    assert result.data["environment_device"] == "cuda:7"
-    assert result.diagnostics["model_key"] == "echo"
+    assert result.task_key == "hello"
+    assert result.output["input"]["text"] == "hello"
+    assert result.output["runtime_context"]["group_name"] == "gpu"
+    assert result.output["runtime_context"]["device"] == "cuda:7"
+    assert result.output["environment_device"] == "cuda:7"
+    assert result.diagnostics["handler_name"] == "echo"
     assert result.diagnostics["caller"] == "integration"
 
 
 def test_submit_and_wait_propagates_worker_failure() -> None:
-    pool = EmbeddedProcessPoolStrategy(
+    pool = ProcessPoolStrategy(
         _registry(
-            ModelDefinition(
-                model_name="broken",
-                class_path="tests.support.fake_models:RaisingPredictModel",
+            HandlerDefinition(
+                handler_name="broken",
+                entrypoint="tests.support.fake_handlers:RaisingHandler",
             )
         ),
         [WorkerGroup(name="cpu", device="cpu")],
@@ -147,3 +147,4 @@ def test_scheduler_can_process_multiple_tasks_in_parallel() -> None:
     assert strategy.max_running == 2
     assert first_result.status == TaskStatus.COMPLETED
     assert second_result.status == TaskStatus.COMPLETED
+

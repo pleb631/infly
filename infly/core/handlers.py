@@ -1,57 +1,64 @@
 import base64
-from collections import ChainMap
-from dataclasses import InitVar, dataclass, field, fields, is_dataclass
 import json
+from collections import ChainMap
 from collections.abc import Mapping
+from dataclasses import InitVar, dataclass, field, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Literal, Self
+
 
 @dataclass(slots=True)
-class ModelDefinition:
-    model_name: str
-    class_path: str
-    module_dict: Mapping[str, Any] = field(default_factory=dict)
-    kwargs: Mapping[str, Any] = field(default_factory=dict)
+class HandlerDefinition:
+    handler_name: str
+    entrypoint: str
+    init_context: Mapping[str, Any] = field(default_factory=dict)
+    init_kwargs: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
-    _allow_reserved_worker_context: InitVar[bool] = False
+    reuse_mode: Literal["worker_cached", "task_transient"] = "worker_cached"
+    _allow_reserved_runtime_context: InitVar[bool] = False
 
-    def __post_init__(self, _allow_reserved_worker_context: bool) -> None:
-        if "worker_context" in self.module_dict and not _allow_reserved_worker_context:
-            raise ValueError("module_dict key 'worker_context' is reserved")
+    def __post_init__(self, _allow_reserved_runtime_context: bool) -> None:
+        if (
+            "runtime_context" in self.init_context
+            and not _allow_reserved_runtime_context
+        ):
+            raise ValueError("init_context key 'runtime_context' is reserved")
+        if self.reuse_mode not in {"worker_cached", "task_transient"}:
+            raise ValueError(
+                "reuse_mode must be one of 'worker_cached' or 'task_transient'"
+            )
 
     @classmethod
-    def with_worker_context(
+    def with_runtime_context(
         cls,
         definition: Self,
         *,
-        worker_context: Mapping[str, Any],
+        runtime_context: Mapping[str, Any],
     ) -> Self:
         return cls(
-            model_name=definition.model_name,
-            class_path=definition.class_path,
-            module_dict=ChainMap(
-                {"worker_context": dict(worker_context)},
-                definition.module_dict,
+            handler_name=definition.handler_name,
+            entrypoint=definition.entrypoint,
+            init_context=ChainMap(
+                {"runtime_context": dict(runtime_context)},
+                definition.init_context,
             ),
-            kwargs=definition.kwargs,
+            init_kwargs=definition.init_kwargs,
             metadata=definition.metadata,
-            _allow_reserved_worker_context=True,
+            reuse_mode=definition.reuse_mode,
+            _allow_reserved_runtime_context=True,
         )
-
-    @property
-    def model_key(self) -> str:
-        return self.model_name
 
     @property
     def cache_key(self) -> str:
         normalized = _normalize_cache_value(
             {
-                "model_name": self.model_name,
-                "class_path": self.class_path,
-                "module_dict": self.module_dict,
-                "kwargs": self.kwargs,
+                "handler_name": self.handler_name,
+                "entrypoint": self.entrypoint,
+                "init_context": self.init_context,
+                "init_kwargs": self.init_kwargs,
                 "metadata": self.metadata,
+                "reuse_mode": self.reuse_mode,
             }
         )
         return json.dumps(
@@ -153,4 +160,4 @@ def _normalize_cache_value(value: Any, *, _seen: set[int] | None = None) -> Any:
     )
 
 
-__all__ = ["ModelDefinition"]
+__all__ = ["HandlerDefinition"]

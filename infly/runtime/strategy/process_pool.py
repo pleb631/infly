@@ -13,12 +13,12 @@ from queue import Empty
 from typing import Any
 from setproctitle import setproctitle
 
-from infly.core.contracts import InferenceRequest, InferenceResult
+from infly.core.contracts import TaskRequest, TaskResult
 from infly.core.errors import ErrorCode, PlatformError
-from infly.core.models import ModelDefinition
+from infly.core.handlers import HandlerDefinition
 from infly.runtime.config import WorkerGroup
-from infly.runtime.registry import ModelRegistry
-from infly.runtime.service import InferenceService
+from infly.runtime.registry import HandlerRegistry
+from infly.runtime.executor import HandlerExecutor
 from infly.runtime.log import (
     MainLogManager,
     LoggingSettings,
@@ -66,10 +66,10 @@ class WorkerLifecycleMessage:
 @dataclass(slots=True, frozen=True)
 class WorkerResultMessage:
     ok: bool
-    request_id: str
+    task_key: str
     worker_id: str
     generation: int
-    payload: InferenceResult | None = None
+    payload: TaskResult | None = None
     error_code: ErrorCode | object | None = None
     error_message: str | None = None
 
@@ -80,7 +80,7 @@ def _worker_loop(
     task_queue: Queue,
     result_queue: Queue,
     lifecycle_queue: Queue,
-    registry: ModelRegistry,
+    registry: HandlerRegistry,
     environment: Mapping[str, str],
     device: str,
     parent_sys_path: list[str],
@@ -103,9 +103,9 @@ def _worker_loop(
         _restore_parent_import_path(parent_sys_path, parent_cwd)
         os.environ.update(environment)
         os.environ["INFLY_DEVICE"] = device
-        service = InferenceService(registry)
+        executor = HandlerExecutor(registry)
         with log_context(name=worker_id, category="worker"):
-            service.preload()
+            executor.preload()
         lifecycle_queue.put(
             WorkerLifecycleMessage(
                 kind="READY",
@@ -147,35 +147,35 @@ def _worker_loop(
             return
         try:
             log.debug(
-                "worker_request_started worker_id=%s generation=%s request_id=%s model=%s",
+                "worker_request_started worker_id=%s generation=%s task_key=%s handler=%s",
                 worker_id,
                 generation,
-                request.request_id,
-                request.model_name,
+                request.task_key,
+                request.handler_name,
             )
             with log_context(name=worker_id, category="worker"):
-                result = service.predict(request)
+                result = executor.execute(request)
             result_queue.put(
                 WorkerResultMessage(
                     ok=True,
                     payload=result,
-                    request_id=request.request_id,
+                    task_key=request.task_key,
                     worker_id=worker_id,
                     generation=generation,
                 )
             )
             log.debug(
-                "worker_request_completed worker_id=%s generation=%s request_id=%s",
+                "worker_request_completed worker_id=%s generation=%s task_key=%s",
                 worker_id,
                 generation,
-                request.request_id,
+                request.task_key,
             )
         except Exception as exc:
             log.error(
-                "worker_request_failed worker_id=%s generation=%s request_id=%s error=%s",
+                "worker_request_failed worker_id=%s generation=%s task_key=%s error=%s",
                 worker_id,
                 generation,
-                request.request_id,
+                request.task_key,
                 exc,
                 exc_info=True,
             )
@@ -186,7 +186,7 @@ def _worker_loop(
                         getattr(exc, "code", ErrorCode.INTERNAL_ERROR)
                     ),
                     error_message=str(exc),
-                    request_id=request.request_id,
+                    task_key=request.task_key,
                     worker_id=worker_id,
                     generation=generation,
                 )
@@ -198,7 +198,7 @@ class _WorkerState:
     worker_id: str
     index: int
     group: WorkerGroup
-    model_names: tuple[str, ...]
+    handler_names: tuple[str, ...]
     generation: int = 0
     task_queue: Any = None
     lifecycle_queue: Any = None
@@ -212,12 +212,12 @@ class _WorkerState:
 log = get_logger("infly")
 
 
-class EmbeddedProcessPoolStrategy:
-    name = "embedded_process_pool"
+class ProcessPoolStrategy:
+    name = "process_pool"
 
     def __init__(
         self,
-        registry: ModelRegistry,
+        registry: HandlerRegistry,
         worker_groups: list[WorkerGroup],
         *,
         startup_timeout_seconds: float = 300,
@@ -226,12 +226,12 @@ class EmbeddedProcessPoolStrategy:
         self._registry = registry
         self._startup_timeout_seconds = startup_timeout_seconds
         self._groups: dict[str, WorkerGroup] = {}
-        self._group_models: dict[str, tuple[str, ...]] = {}
-        self._model_groups: dict[str, list[str]] = defaultdict(list)
+        self._group_handlers: dict[str, tuple[str, ...]] = {}
+        self._handler_groups: dict[str, list[str]] = defaultdict(list)
         self._workers: dict[str, _WorkerState] = {}
         self._group_cursors: dict[str, int] = defaultdict(int)
         self._smooth_weights: dict[str, int] = defaultdict(int)
-        self._futures: dict[str, Future[InferenceResult]] = {}
+        self._futures: dict[str, Future[TaskResult]] = {}
         self._assignments: dict[str, tuple[str, int]] = {}
         self._lock = threading.RLock()
         self._mp_context = get_context("spawn")
@@ -258,7 +258,7 @@ class EmbeddedProcessPoolStrategy:
             if not worker_groups:
                 raise PlatformError(
                     ErrorCode.INTERNAL_ERROR,
-                    "EmbeddedProcessPoolStrategy requires at least one worker group",
+                    "ProcessPoolStrategy requires at least one worker group",
                 )
             if startup_timeout_seconds <= 0:
                 raise PlatformError(
@@ -274,29 +274,29 @@ class EmbeddedProcessPoolStrategy:
                 )
 
             self._groups = {group.name: group for group in worker_groups}
-            all_model_names = tuple(
-                definition.model_name for definition in registry.list()
+            all_handler_names = tuple(
+                definition.handler_name for definition in registry.list()
             )
             for group in worker_groups:
-                model_names = tuple(group.models) if group.models else all_model_names
-                for model_name in model_names:
+                handler_names = tuple(group.handlers) if group.handlers else all_handler_names
+                for handler_name in handler_names:
                     try:
-                        registry.get(model_name)
+                        registry.get(handler_name)
                     except PlatformError as exc:
                         raise PlatformError(
                             ErrorCode.INTERNAL_ERROR,
-                            f"WorkerGroup '{group.name}' references missing model "
-                            f"'{model_name}'",
+                            f"WorkerGroup '{group.name}' references missing handler "
+                            f"'{handler_name}'",
                         ) from exc
-                    self._model_groups[model_name].append(group.name)
-                self._group_models[group.name] = model_names
+                    self._handler_groups[handler_name].append(group.name)
+                self._group_handlers[group.name] = handler_names
                 for index in range(group.process_count):
                     worker_id = f"{group.name}_R{index}"
                     self._workers[worker_id] = _WorkerState(
                         worker_id=worker_id,
                         index=index,
                         group=group,
-                        model_names=model_names,
+                        handler_names=handler_names,
                     )
 
             self._result_queue: Queue = self._queue_factory()
@@ -328,72 +328,72 @@ class EmbeddedProcessPoolStrategy:
 
     def execute(
         self,
-        request: InferenceRequest,
-    ) -> Future[InferenceResult]:
-        future: Future[InferenceResult] = Future()
+        request: TaskRequest,
+    ) -> Future[TaskResult]:
+        future: Future[TaskResult] = Future()
         with self._lock:
             if not self._accepting:
                 log.warning(
-                    "request_rejected request_id=%s reason=pool_closed",
-                    request.request_id,
+                    "request_rejected task_key=%s reason=pool_closed",
+                    request.task_key,
                 )
                 future.set_exception(
                     PlatformError(
                         ErrorCode.INTERNAL_ERROR,
-                        "EmbeddedProcessPoolStrategy is closed",
+                        "ProcessPoolStrategy is closed",
                     )
                 )
                 return future
 
-            if request.request_id in self._futures:
+            if request.task_key in self._futures:
                 log.warning(
-                    "request_rejected request_id=%s reason=duplicate",
-                    request.request_id,
+                    "request_rejected task_key=%s reason=duplicate",
+                    request.task_key,
                 )
                 future.set_exception(
                     PlatformError(
                         ErrorCode.INTERNAL_ERROR,
-                        f"Duplicate request_id: {request.request_id}",
+                        f"Duplicate task_key: {request.task_key}",
                     )
                 )
                 return future
 
             group_names = [
                 group_name
-                for group_name in self._model_groups.get(request.model_name, [])
+                for group_name in self._handler_groups.get(request.handler_name, [])
                 if self._alive_workers_locked(group_name)
             ]
             if not group_names:
                 log.warning(
-                    "request_rejected request_id=%s model=%s reason=no_live_worker",
-                    request.request_id,
-                    request.model_name,
+                    "request_rejected task_key=%s handler=%s reason=no_live_worker",
+                    request.task_key,
+                    request.handler_name,
                 )
                 future.set_exception(
                     PlatformError(
                         ErrorCode.WORKER_UNAVAILABLE,
-                        f"No live worker is deployed for model '{request.model_name}'",
+                        f"No live worker is deployed for handler '{request.handler_name}'",
                     )
                 )
                 return future
 
-            self._futures[request.request_id] = future
+            self._futures[request.task_key] = future
             remaining_groups = list(group_names)
             while remaining_groups:
                 group_name = self._select_group_locked(remaining_groups)
                 for worker in self._ordered_workers_locked(group_name):
                     assignment = (worker.worker_id, worker.generation)
-                    self._assignments[request.request_id] = assignment
+                    self._assignments[request.task_key] = assignment
                     worker.outstanding += 1
                     try:
                         worker.task_queue.put_nowait(request)
                     except Exception as exc:
                         worker.outstanding -= 1
-                        self._assignments.pop(request.request_id, None)
+                        self._assignments.pop(request.task_key, None)
                         log.warning(
-                            "request_assignment_failed request_id=%s worker_id=%s "
+                            "request_assignment_failed task_key=%s worker_id=%s "
                             "generation=%s error=%s",
-                            request.request_id,
+                            request.task_key,
                             worker.worker_id,
                             worker.generation,
                             exc,
@@ -405,27 +405,27 @@ class EmbeddedProcessPoolStrategy:
                         worker.index + 1
                     ) % worker.group.process_count
                     log.debug(
-                        "request_assigned request_id=%s model=%s worker_id=%s "
+                        "request_assigned task_key=%s handler=%s worker_id=%s "
                         "generation=%s",
-                        request.request_id,
-                        request.model_name,
+                        request.task_key,
+                        request.handler_name,
                         worker.worker_id,
                         worker.generation,
                     )
                     return future
                 remaining_groups.remove(group_name)
 
-            self._futures.pop(request.request_id, None)
+            self._futures.pop(request.task_key, None)
             log.warning(
-                "request_rejected request_id=%s model=%s reason=assignment_failed",
-                request.request_id,
-                request.model_name,
+                "request_rejected task_key=%s handler=%s reason=assignment_failed",
+                request.task_key,
+                request.handler_name,
             )
             future.set_exception(
                 PlatformError(
                     ErrorCode.WORKER_UNAVAILABLE,
-                    f"Unable to submit request to a live worker for model "
-                    f"'{request.model_name}'",
+                    f"Unable to submit request to a live worker for handler "
+                    f"'{request.handler_name}'",
                 )
             )
             return future
@@ -465,7 +465,7 @@ class EmbeddedProcessPoolStrategy:
         self._fail_all_pending(
             PlatformError(
                 ErrorCode.INTERNAL_ERROR,
-                "EmbeddedProcessPoolStrategy closed before request completed",
+                "ProcessPoolStrategy closed before request completed",
             )
         )
         self._close_queues()
@@ -518,19 +518,19 @@ class EmbeddedProcessPoolStrategy:
             worker.process.pid,
         )
 
-    def _worker_registry(self, worker: _WorkerState) -> ModelRegistry:
-        child_registry = ModelRegistry()
+    def _worker_registry(self, worker: _WorkerState) -> HandlerRegistry:
+        child_registry = HandlerRegistry()
         context = {
             "group_name": worker.group.name,
             "worker_id": worker.worker_id,
             "device": worker.group.device,
         }
-        for model_name in worker.model_names:
-            definition = self._registry.get(model_name)
+        for handler_name in worker.handler_names:
+            definition = self._registry.get(handler_name)
             child_registry.add(
-                ModelDefinition.with_worker_context(
+                HandlerDefinition.with_runtime_context(
                     definition,
-                    worker_context=context,
+                    runtime_context=context,
                 )
             )
         return child_registry
@@ -704,18 +704,18 @@ class EmbeddedProcessPoolStrategy:
             except Empty:
                 continue
 
-            request_id = item.request_id
+            task_key = item.task_key
             assignment = (item.worker_id, item.generation)
 
             with self._lock:
-                if self._assignments.get(request_id) != assignment:
+                if self._assignments.get(task_key) != assignment:
                     log.debug(
-                        "worker_result_ignored request_id=%s reason=stale_assignment",
-                        request_id,
+                        "worker_result_ignored task_key=%s reason=stale_assignment",
+                        task_key,
                     )
                     continue
-                self._assignments.pop(request_id, None)
-                future = self._futures.pop(request_id, None)
+                self._assignments.pop(task_key, None)
+                future = self._futures.pop(task_key, None)
                 worker = self._workers.get(assignment[0])
                 if worker is not None and worker.outstanding > 0:
                     worker.outstanding -= 1
@@ -726,16 +726,16 @@ class EmbeddedProcessPoolStrategy:
                 if item.ok:
                     future.set_result(item.payload)
                     log.debug(
-                        "worker_result_completed request_id=%s worker_id=%s generation=%s",
-                        request_id,
+                        "worker_result_completed task_key=%s worker_id=%s generation=%s",
+                        task_key,
                         assignment[0],
                         assignment[1],
                     )
                 else:
                     log.warning(
-                        "worker_result_failed request_id=%s worker_id=%s generation=%s "
+                        "worker_result_failed task_key=%s worker_id=%s generation=%s "
                         "error=%s",
-                        request_id,
+                        task_key,
                         assignment[0],
                         assignment[1],
                         item.error_message or "Unknown worker error",
@@ -748,8 +748,8 @@ class EmbeddedProcessPoolStrategy:
                     )
             except Exception as exc:
                 log.error(
-                    "worker_result_processing_failed request_id=%s error=%s",
-                    request_id,
+                    "worker_result_processing_failed task_key=%s error=%s",
+                    task_key,
                     exc,
                     exc_info=True,
                 )
@@ -810,14 +810,14 @@ class EmbeddedProcessPoolStrategy:
     def _take_worker_futures_locked(
         self,
         worker: _WorkerState,
-    ) -> list[Future[InferenceResult]]:
-        failed: list[Future[InferenceResult]] = []
+    ) -> list[Future[TaskResult]]:
+        failed: list[Future[TaskResult]] = []
         assignment = (worker.worker_id, worker.generation)
-        for request_id, owner in list(self._assignments.items()):
+        for task_key, owner in list(self._assignments.items()):
             if owner != assignment:
                 continue
-            self._assignments.pop(request_id, None)
-            future = self._futures.pop(request_id, None)
+            self._assignments.pop(task_key, None)
+            future = self._futures.pop(task_key, None)
             if future is not None:
                 failed.append(future)
         worker.outstanding = 0
@@ -920,7 +920,7 @@ class EmbeddedProcessPoolStrategy:
 
     @staticmethod
     def _fail_futures(
-        futures: list[Future[InferenceResult]],
+        futures: list[Future[TaskResult]],
         exc: Exception,
     ) -> None:
         for future in futures:
@@ -928,4 +928,6 @@ class EmbeddedProcessPoolStrategy:
                 future.set_exception(exc)
 
 
-__all__ = ["EmbeddedProcessPoolStrategy"]
+
+__all__ = ["ProcessPoolStrategy"]
+

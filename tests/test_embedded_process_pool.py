@@ -4,21 +4,21 @@ from dataclasses import dataclass
 
 import pytest
 
-from infly.core.contracts import InferenceRequest, InferenceResult
+from infly.core.contracts import TaskRequest, TaskResult
 from infly.core.errors import ErrorCode, PlatformError
 
-from infly.core.models import ModelDefinition
+from infly.core.handlers import HandlerDefinition
 from infly.runtime.log import ContextFilter, LoggingSettings
 from infly.runtime.config import WorkerGroup
-from infly.runtime.registry import ModelRegistry
-from infly.runtime.strategy.embedded_process_pool import (
-    EmbeddedProcessPoolStrategy,
+from infly.runtime.registry import HandlerRegistry
+from infly.runtime.strategy.process_pool import (
+    ProcessPoolStrategy,
     _worker_loop,
 )
 
 
-def _registry(*definitions: ModelDefinition) -> ModelRegistry:
-    registry = ModelRegistry()
+def _registry(*definitions: HandlerDefinition) -> HandlerRegistry:
+    registry = HandlerRegistry()
     for definition in definitions:
         registry.add(definition)
     return registry
@@ -26,30 +26,30 @@ def _registry(*definitions: ModelDefinition) -> ModelRegistry:
 
 def _definition(
     name: str,
-    class_name: str = "ContextModel",
+    class_name: str = "ContextHandler",
     **kwargs: object,
-) -> ModelDefinition:
-    return ModelDefinition(
-        model_name=name,
-        class_path=f"tests.support.fake_models:{class_name}",
-        kwargs=kwargs,
+) -> HandlerDefinition:
+    return HandlerDefinition(
+        handler_name=name,
+        entrypoint=f"tests.support.fake_handlers:{class_name}",
+        init_kwargs=kwargs,
     )
 
 
-def _request(request_id: str, model_name: str = "echo") -> InferenceRequest:
-    return InferenceRequest(
-        request_id=request_id,
-        model_name=model_name,
-        payload={"text": request_id},
+def _request(task_key: str, handler_name: str = "echo") -> TaskRequest:
+    return TaskRequest(
+        task_key=task_key,
+        handler_name=handler_name,
+        input={"text": task_key},
         caller="test",
     )
 
 
-def test_pool_validates_groups_and_deployed_models() -> None:
+def test_pool_validates_groups_and_deployed_handlers() -> None:
     registry = _registry(_definition("echo"))
 
     with pytest.raises(PlatformError) as caught:
-        EmbeddedProcessPoolStrategy(registry, [])
+        ProcessPoolStrategy(registry, [])
     assert caught.value.code == ErrorCode.INTERNAL_ERROR
 
     duplicate_groups = [
@@ -57,19 +57,19 @@ def test_pool_validates_groups_and_deployed_models() -> None:
         WorkerGroup(name="same", device="cpu"),
     ]
     with pytest.raises(PlatformError, match="unique"):
-        EmbeddedProcessPoolStrategy(registry, duplicate_groups)
+        ProcessPoolStrategy(registry, duplicate_groups)
 
     with pytest.raises(PlatformError, match="missing"):
-        EmbeddedProcessPoolStrategy(
+        ProcessPoolStrategy(
             registry,
-            [WorkerGroup(name="cpu", device="cpu", models=["missing"])],
+            [WorkerGroup(name="cpu", device="cpu", handlers=["missing"])],
         )
 
 
 def test_pool_injects_distinct_worker_context_without_mutating_registry() -> None:
     definition = _definition("echo")
     registry = _registry(definition)
-    pool = EmbeddedProcessPoolStrategy(
+    pool = ProcessPoolStrategy(
         registry,
         [
             WorkerGroup(
@@ -88,22 +88,22 @@ def test_pool_injects_distinct_worker_context_without_mutating_registry() -> Non
     finally:
         pool.close()
 
-    contexts = [result.data["worker_context"] for result in results]
+    contexts = [result.output["runtime_context"] for result in results]
     assert {context["group_name"] for context in contexts} == {"gpu"}
     assert {context["device"] for context in contexts} == {"cuda:7"}
     assert {context["worker_id"] for context in contexts} == {"gpu_R0", "gpu_R1"}
-    assert {result.data["environment_device"] for result in results} == {"cuda:7"}
-    assert {result.data["custom_environment"] for result in results} == {
+    assert {result.output["environment_device"] for result in results} == {"cuda:7"}
+    assert {result.output["custom_environment"] for result in results} == {
         "configured"
     }
-    assert definition.module_dict == {}
+    assert definition.init_context == {}
 
 
-def test_pool_only_routes_models_deployed_to_a_group() -> None:
+def test_pool_only_routes_handlers_deployed_to_a_group() -> None:
     registry = _registry(_definition("deployed"), _definition("idle"))
-    pool = EmbeddedProcessPoolStrategy(
+    pool = ProcessPoolStrategy(
         registry,
-        [WorkerGroup(name="cpu", device="cpu", models=["deployed"])],
+        [WorkerGroup(name="cpu", device="cpu", handlers=["deployed"])],
     )
     try:
         result = pool.execute(_request("ok", "deployed")).result(timeout=3)
@@ -113,15 +113,15 @@ def test_pool_only_routes_models_deployed_to_a_group() -> None:
     finally:
         pool.close()
 
-    assert result.request_id == "ok"
+    assert result.task_key == "ok"
     assert caught.value.code == ErrorCode.WORKER_UNAVAILABLE
 
 
-def test_pool_fails_construction_when_model_preload_fails() -> None:
-    registry = _registry(_definition("broken", "FailingModel"))
+def test_pool_fails_construction_when_handler_preload_fails() -> None:
+    registry = _registry(_definition("broken", "FailingHandler"))
 
     with pytest.raises(PlatformError) as caught:
-        EmbeddedProcessPoolStrategy(
+        ProcessPoolStrategy(
             registry,
             [WorkerGroup(name="cpu", device="cpu")],
             startup_timeout_seconds=2,
@@ -134,7 +134,7 @@ def test_pool_fails_construction_when_model_preload_fails() -> None:
 def test_abort_startup_closes_worker_and_result_queues(monkeypatch) -> None:
     from types import SimpleNamespace
 
-    import infly.runtime.strategy.embedded_process_pool as pool_module
+    import infly.runtime.strategy.process_pool as pool_module
 
     class FakeQueue:
         def __init__(self) -> None:
@@ -168,7 +168,7 @@ def test_abort_startup_closes_worker_and_result_queues(monkeypatch) -> None:
         def stop(self) -> None:
             self.stopped = True
 
-    pool = object.__new__(EmbeddedProcessPoolStrategy)
+    pool = object.__new__(ProcessPoolStrategy)
     worker = SimpleNamespace(
         worker_id="cpu_R0",
         generation=1,
@@ -183,7 +183,7 @@ def test_abort_startup_closes_worker_and_result_queues(monkeypatch) -> None:
     pool._closing = False
     pool._result_queue = FakeQueue()
 
-    pool_module.EmbeddedProcessPoolStrategy._abort_startup(pool)
+    pool_module.ProcessPoolStrategy._abort_startup(pool)
 
     assert worker.task_queue is None
     assert worker.lifecycle_queue is None
@@ -195,11 +195,11 @@ def test_abort_startup_closes_worker_and_result_queues(monkeypatch) -> None:
 
 def test_pool_startup_timeout_is_internal_error() -> None:
     registry = _registry(
-        _definition("slow", "SlowInitModel", delay_seconds=1)
+        _definition("slow", "SlowInitHandler", delay_seconds=1)
     )
 
     with pytest.raises(PlatformError) as caught:
-        EmbeddedProcessPoolStrategy(
+        ProcessPoolStrategy(
             registry,
             [WorkerGroup(name="cpu", device="cpu")],
             startup_timeout_seconds=0.05,
@@ -209,28 +209,28 @@ def test_pool_startup_timeout_is_internal_error() -> None:
     assert "timed out" in str(caught.value).lower()
 
 
-def test_empty_model_list_preloads_all_registry_models() -> None:
+def test_empty_handler_list_preloads_all_registry_handlers() -> None:
     registry = _registry(
         _definition("healthy"),
-        _definition("broken", "FailingModel"),
+        _definition("broken", "FailingHandler"),
     )
 
     with pytest.raises(PlatformError, match="startup"):
-        EmbeddedProcessPoolStrategy(
+        ProcessPoolStrategy(
             registry,
-            [WorkerGroup(name="all", device="cpu", models=[])],
+            [WorkerGroup(name="all", device="cpu", handlers=[])],
             startup_timeout_seconds=2,
         )
 
-    pool = EmbeddedProcessPoolStrategy(
+    pool = ProcessPoolStrategy(
         registry,
-        [WorkerGroup(name="selected", device="cpu", models=["healthy"])],
+        [WorkerGroup(name="selected", device="cpu", handlers=["healthy"])],
     )
     pool.close()
 
 
 def test_cross_group_routing_is_weighted_by_live_process_count() -> None:
-    pool = EmbeddedProcessPoolStrategy(
+    pool = ProcessPoolStrategy(
         _registry(_definition("echo")),
         [
             WorkerGroup(name="small", device="cpu", process_count=1),
@@ -246,17 +246,17 @@ def test_cross_group_routing_is_weighted_by_live_process_count() -> None:
         pool.close()
 
     group_names = [
-        result.data["worker_context"]["group_name"] for result in results
+        result.output["runtime_context"]["group_name"] for result in results
     ]
     assert group_names.count("small") == 2
     assert group_names.count("large") == 4
 
 
-def test_duplicate_request_and_model_failure_are_internal_errors() -> None:
-    pool = EmbeddedProcessPoolStrategy(
+def test_duplicate_request_and_handler_failure_are_internal_errors() -> None:
+    pool = ProcessPoolStrategy(
         _registry(
-            _definition("slow", "SlowModel", delay_seconds=0.2),
-            _definition("broken", "RaisingPredictModel"),
+            _definition("slow", "SlowHandler", delay_seconds=0.2),
+            _definition("broken", "RaisingHandler"),
         ),
         [WorkerGroup(name="cpu", device="cpu")],
     )
@@ -265,20 +265,20 @@ def test_duplicate_request_and_model_failure_are_internal_errors() -> None:
         duplicate = pool.execute(_request("duplicate", "slow"))
         with pytest.raises(PlatformError) as duplicate_error:
             duplicate.result(timeout=1)
-        with pytest.raises(PlatformError) as model_error:
+        with pytest.raises(PlatformError) as handler_error:
             pool.execute(_request("broken", "broken")).result(timeout=3)
         original.result(timeout=3)
     finally:
         pool.close()
 
     assert duplicate_error.value.code == ErrorCode.INTERNAL_ERROR
-    assert model_error.value.code == ErrorCode.INTERNAL_ERROR
+    assert handler_error.value.code == ErrorCode.INTERNAL_ERROR
 
 
 def test_close_is_idempotent_and_fails_pending_future() -> None:
-    pool = EmbeddedProcessPoolStrategy(
-        _registry(_definition("slow", "SlowModel", delay_seconds=5)),
-        [WorkerGroup(name="cpu", device="cpu", models=["slow"])],
+    pool = ProcessPoolStrategy(
+        _registry(_definition("slow", "SlowHandler", delay_seconds=5)),
+        [WorkerGroup(name="cpu", device="cpu", handlers=["slow"])],
     )
     pending = pool.execute(_request("pending", "slow"))
 
@@ -291,7 +291,7 @@ def test_close_is_idempotent_and_fails_pending_future() -> None:
 
 
 def test_close_stops_logging_listener() -> None:
-    pool = EmbeddedProcessPoolStrategy(
+    pool = ProcessPoolStrategy(
         _registry(_definition("echo")),
         [WorkerGroup(name="cpu", device="cpu")],
     )
@@ -317,24 +317,24 @@ def test_worker_loop_applies_log_context_in_worker_layer(
         def put(self, item, timeout=None):
             self.put_items.append(item)
 
-    class FakeService:
-        def __init__(self, registry: ModelRegistry) -> None:
+    class FakeExecutor:
+        def __init__(self, registry: HandlerRegistry) -> None:
             self.registry = registry
 
         def preload(self) -> None:
-            logging.getLogger("fake.service").info("service_preload_called")
+            logging.getLogger("fake.executor").info("executor_preload_called")
 
-        def predict(self, request: InferenceRequest) -> InferenceResult:
-            logging.getLogger("fake.service").info(
-                "service_predict_called request_id=%s",
-                request.request_id,
+        def execute(self, request: TaskRequest) -> TaskResult:
+            logging.getLogger("fake.executor").info(
+                "executor_execute_called task_key=%s",
+                request.task_key,
             )
-            return InferenceResult(
-                request_id=request.request_id,
-                data={"result": "ok"},
+            return TaskResult(
+                task_key=request.task_key,
+                output={"result": "ok"},
             )
 
-    import infly.runtime.strategy.embedded_process_pool as pool_module
+    import infly.runtime.strategy.process_pool as pool_module
 
     caplog.handler.addFilter(ContextFilter())
     caplog.set_level(logging.INFO)
@@ -346,14 +346,14 @@ def test_worker_loop_applies_log_context_in_worker_layer(
         "_restore_parent_import_path",
         lambda *args, **kwargs: None,
     )
-    monkeypatch.setattr(pool_module, "InferenceService", FakeService)
+    monkeypatch.setattr(pool_module, "HandlerExecutor", FakeExecutor)
 
     task_queue = FakeQueue(
         [
-            InferenceRequest(
-                request_id="req-1",
-                model_name="echo",
-                payload={"text": "hello"},
+            TaskRequest(
+                task_key="req-1",
+                handler_name="echo",
+                input={"text": "hello"},
                 caller="test",
             ),
             None,
@@ -368,7 +368,7 @@ def test_worker_loop_applies_log_context_in_worker_layer(
         task_queue=task_queue,
         result_queue=result_queue,
         lifecycle_queue=lifecycle_queue,
-        registry=ModelRegistry(),
+        registry=HandlerRegistry(),
         environment={},
         device="cpu",
         parent_sys_path=[],
@@ -378,19 +378,21 @@ def test_worker_loop_applies_log_context_in_worker_layer(
     )
 
     assert any(
-        record.message == "service_preload_called"
+        record.message == "executor_preload_called"
         and record.log_category == "worker"
         and record.log_name == "worker-1"
         for record in caplog.records
     )
     assert any(
-        record.message.startswith("service_predict_called")
+        record.message.startswith("executor_execute_called")
         and record.log_category == "worker"
         and record.log_name == "worker-1"
         for record in caplog.records
     )
     assert lifecycle_queue.put_items[0].kind == "READY"
     assert result_queue.put_items[0].ok is True
-    assert result_queue.put_items[0].payload.request_id == "req-1"
+    assert result_queue.put_items[0].payload.task_key == "req-1"
+
+
 
 

@@ -71,7 +71,7 @@ class WorkerGroup:
     name: str
     device: str
     process_count: int = 1
-    models: list[str] = field(default_factory=list)
+    handlers: list[str] = field(default_factory=list)
     environment: Mapping[str, str] = field(default_factory=dict)
     safety: WorkerSafetyPolicy = field(default_factory=WorkerSafetyPolicy)
 
@@ -83,11 +83,10 @@ class WorkerGroup:
             1,
             field_name="process_count",
         )
-        self.models = list(self.models)
-        if any(not model_name.strip() for model_name in self.models):
-            raise ValueError("model names must not be empty")
-        if len(self.models) != len(set(self.models)):
-            raise ValueError("models must not contain duplicates")
+        if any(not handler_name.strip() for handler_name in self.handlers):
+            raise ValueError("handler names must not be empty")
+        if len(self.handlers) != len(set(self.handlers)):
+            raise ValueError("handlers must not contain duplicates")
         if "INFLY_DEVICE" in self.environment:
             raise ValueError("environment key 'INFLY_DEVICE' is reserved")
         self.environment = dict(self.environment)

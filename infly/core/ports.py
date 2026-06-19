@@ -5,30 +5,30 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 from infly.core.contracts import (
-    InferenceRequest,
-    InferenceResult,
     TaskRecord,
+    TaskRequest,
+    TaskResult,
     TaskStatus,
 )
 from infly.core.errors import ErrorCode
 
 
-class ModelProtocol(Protocol):
-    def predict(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+class HandlerProtocol(Protocol):
+    def handle(self, input: Mapping[str, Any]) -> Mapping[str, Any]:
         ...
 
 
-class ModelFactory(Protocol):
+class HandlerFactory(Protocol):
     def __call__(
         self,
-        module_dict: Mapping[str, Any],
+        init_context: Mapping[str, Any],
         **kwargs: Any,
-    ) -> ModelProtocol:
+    ) -> HandlerProtocol:
         ...
 
 
 class ExecutionStrategy(Protocol):
-    def execute(self, request: InferenceRequest) -> Future[InferenceResult]:
+    def execute(self, request: TaskRequest) -> Future[TaskResult]:
         ...
 
     def close(self) -> None:
@@ -58,7 +58,7 @@ class TaskBackend(Protocol):
         task_id: str,
         status: TaskStatus,
         *,
-        result: InferenceResult | None = None,
+        result: TaskResult | None = None,
         error_code: ErrorCode | None = None,
         error_message: str | None = None,
     ) -> TaskRecord:
@@ -70,7 +70,7 @@ class TaskBackend(Protocol):
 
 __all__ = [
     "ExecutionStrategy",
-    "ModelFactory",
-    "ModelProtocol",
+    "HandlerFactory",
+    "HandlerProtocol",
     "TaskBackend",
 ]

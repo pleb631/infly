@@ -7,10 +7,10 @@ import uuid
 from concurrent.futures import Future
 
 from infly.core.contracts import (
-    InferenceRequest,
-    InferenceResult,
     TaskQueryResponse,
     TaskRecord,
+    TaskRequest,
+    TaskResult,
     TaskStatus,
 )
 from infly.core.errors import ErrorCode, PlatformError
@@ -142,13 +142,13 @@ class TaskScheduler:
         if pending_records:
             self._notify_waiters()
 
-    def submit(self, request: InferenceRequest, *, priority: int = 0) -> str:
+    def submit(self, request: TaskRequest, *, priority: int = 0) -> str:
         with self._lifecycle_lock:
             if not self._accepting:
                 log.warning(
-                    "scheduler_submission_rejected request_id=%s model=%s reason=closed",
-                    request.request_id,
-                    request.model_name,
+                    "scheduler_submission_rejected task_key=%s handler=%s reason=closed",
+                    request.task_key,
+                    request.handler_name,
                 )
                 raise PlatformError(
                     ErrorCode.INVALID_STATE,
@@ -157,9 +157,9 @@ class TaskScheduler:
 
             if not self._outstanding_slots.acquire(blocking=False):
                 log.warning(
-                    "scheduler_overloaded request_id=%s model=%s limit=%s",
-                    request.request_id,
-                    request.model_name,
+                    "scheduler_overloaded task_key=%s handler=%s limit=%s",
+                    request.task_key,
+                    request.handler_name,
                     self._scheduler_config.max_outstanding_tasks,
                 )
                 raise PlatformError(
@@ -179,19 +179,19 @@ class TaskScheduler:
             except Exception as exc:
                 self._release_outstanding_slot(task_id)
                 log.error(
-                    "task_submission_failed request_id=%s model=%s error=%s",
-                    request.request_id,
-                    request.model_name,
+                    "task_submission_failed task_key=%s handler=%s error=%s",
+                    request.task_key,
+                    request.handler_name,
                     exc,
                     exc_info=True,
                 )
                 raise
 
             log.debug(
-                "scheduler_task_accepted task_id=%s request_id=%s model=%s priority=%s",
+                "scheduler_task_accepted task_id=%s task_key=%s handler=%s priority=%s",
                 task_id,
-                request.request_id,
-                request.model_name,
+                request.task_key,
+                request.handler_name,
                 priority,
             )
             self._notify_waiters()
@@ -199,12 +199,12 @@ class TaskScheduler:
 
     def submit_and_wait(
         self,
-        request: InferenceRequest,
+        request: TaskRequest,
         *,
         priority: int = 0,
         timeout_seconds: float | None = None,
         consume: bool = False,
-    ) -> InferenceResult:
+    ) -> TaskResult:
         self.start()
         task_id = self.submit(request, priority=priority)
         try:
@@ -398,10 +398,10 @@ class TaskScheduler:
 
         self._backend.update_status(task_id, TaskStatus.RUNNING)
         log.debug(
-            "task_execution_started task_id=%s request_id=%s model=%s",
+            "task_execution_started task_id=%s task_key=%s handler=%s",
             task_id,
-            record.request.request_id,
-            record.request.model_name,
+            record.request.task_key,
+            record.request.handler_name,
         )
         try:
             execution_future = self._strategy.execute(record.request)
@@ -487,7 +487,7 @@ class TaskScheduler:
     def _complete_task(
         self,
         task_id: str,
-        execution_future: Future[InferenceResult],
+        execution_future: Future[TaskResult],
     ) -> None:
         try:
             result = execution_future.result()

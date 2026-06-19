@@ -13,7 +13,7 @@ from infly.runtime.config import (
     [
         {"name": " ", "device": "x"},
         {"name": "x", "device": " "},
-        {"name": "cpu", "device": "cpu", "models": ["echo", "echo"]},
+        {"name": "cpu", "device": "cpu", "handlers": ["echo", "echo"]},
         {"name": "cpu", "device": "cpu", "environment": {"INFLY_DEVICE": "cuda:0"}},
     ],
 )

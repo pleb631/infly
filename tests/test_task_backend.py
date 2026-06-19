@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from infly.core.contracts import InferenceRequest, InferenceResult, TaskRecord, TaskStatus
+from infly.core.contracts import TaskRecord, TaskRequest, TaskResult, TaskStatus
 from infly.core.errors import ErrorCode
 from infly.runtime.task_backend import InMemoryTaskBackend
 
@@ -10,10 +10,10 @@ from infly.runtime.task_backend import InMemoryTaskBackend
 def _record(task_id: str) -> TaskRecord:
     return TaskRecord(
         task_id=task_id,
-        request=InferenceRequest(
-            request_id=f"request-{task_id}",
-            model_name="demo",
-            payload={},
+        request=TaskRequest(
+            task_key=f"request-{task_id}",
+            handler_name="demo",
+            input={},
             caller="test",
         ),
     )
@@ -83,26 +83,26 @@ def test_terminal_reads_return_isolated_copies() -> None:
     backend.update_status(
         "task-1",
         TaskStatus.COMPLETED,
-        result=InferenceResult(request_id="task-1", data={"answer": 42}),
+        result=TaskResult(task_key="task-1", output={"answer": 42}),
     )
 
     fetched = backend.get("task-1", copy=True)
     assert fetched is not None
-    fetched.request.payload["mutated"] = True
-    fetched.result.data["answer"] = 0
+    fetched.request.input["mutated"] = True
+    fetched.result.output["answer"] = 0
 
     listed = backend.list_all()[0]
-    listed.request.payload["listed"] = True
+    listed.request.input["listed"] = True
 
     first_terminal = backend.read("task-1")
     assert first_terminal is not None
-    first_terminal.request.payload["terminal"] = True
-    first_terminal.result.data["answer"] = 1
+    first_terminal.request.input["terminal"] = True
+    first_terminal.result.output["answer"] = 1
 
     second_terminal = backend.read("task-1")
     assert second_terminal is not None
-    assert second_terminal.request.payload == {}
-    assert second_terminal.result.data == {"answer": 42}
+    assert second_terminal.request.input == {}
+    assert second_terminal.result.output == {"answer": 42}
 
 
 @pytest.mark.parametrize("status", [TaskStatus.COMPLETED, TaskStatus.FAILED])
@@ -112,7 +112,7 @@ def test_read_retains_terminal_record_by_default(status: TaskStatus) -> None:
     backend.update_status(
         "task-1",
         status,
-        result=InferenceResult(request_id="task-1", data={"answer": 42}),
+        result=TaskResult(task_key="task-1", output={"answer": 42}),
     )
     updated_at = backend.get("task-1", copy=True).updated_at  # type: ignore[union-attr]
 
@@ -122,7 +122,7 @@ def test_read_retains_terminal_record_by_default(status: TaskStatus) -> None:
     assert first is not None
     assert first.status == status
     assert first.result is not None
-    assert first.result.data == {"answer": 42}
+    assert first.result.output == {"answer": 42}
     assert second == first
     assert backend.get("task-1") is not None
     assert (
@@ -243,13 +243,13 @@ def test_repeated_terminal_update_does_not_change_finish_order() -> None:
     backend.update_status(
         "first",
         TaskStatus.COMPLETED,
-        result=InferenceResult(request_id="first", data={"version": 1}),
+        result=TaskResult(task_key="first", output={"version": 1}),
     )
     backend.update_status("second", TaskStatus.COMPLETED)
     backend.update_status(
         "first",
         TaskStatus.COMPLETED,
-        result=InferenceResult(request_id="first", data={"version": 2}),
+        result=TaskResult(task_key="first", output={"version": 2}),
     )
     backend.update_status("third", TaskStatus.COMPLETED)
 

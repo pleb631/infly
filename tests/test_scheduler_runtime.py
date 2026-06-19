@@ -5,8 +5,8 @@ from concurrent.futures import Future
 import pytest
 
 from infly.core.contracts import (
-    InferenceRequest,
-    InferenceResult,
+    TaskRequest,
+    TaskResult,
     TaskRecord,
     TaskStatus,
 )
@@ -16,11 +16,11 @@ from infly.runtime.task_backend import InMemoryTaskBackend
 from infly.runtime.config import SchedulerConfig
 
 
-def _request(request_id: str = "req-1") -> InferenceRequest:
-    return InferenceRequest(
-        request_id=request_id,
-        model_name="echo",
-        payload={"text": "ok"},
+def _request(task_key: str = "req-1") -> TaskRequest:
+    return TaskRequest(
+        task_key=task_key,
+        handler_name="echo",
+        input={"text": "ok"},
         caller="test",
     )
 
@@ -37,16 +37,16 @@ def _wait_for_status(
     return scheduler.query(task_id)
 
 
-def _result(request: InferenceRequest) -> InferenceResult:
-    return InferenceResult(
-        request_id=request.request_id,
-        data={"echo": request.payload["text"]},
+def _result(request: TaskRequest) -> TaskResult:
+    return TaskResult(
+        task_key=request.task_key,
+        output={"echo": request.input["text"]},
     )
 
 
 class SuccessStrategy:
-    def execute(self, request: InferenceRequest) -> Future[InferenceResult]:
-        future: Future[InferenceResult] = Future()
+    def execute(self, request: TaskRequest) -> Future[TaskResult]:
+        future: Future[TaskResult] = Future()
         future.set_result(_result(request))
         return future
 
@@ -60,8 +60,8 @@ class BlockingStrategy:
         self.release = threading.Event()
         self.closed = threading.Event()
 
-    def execute(self, request: InferenceRequest) -> Future[InferenceResult]:
-        future: Future[InferenceResult] = Future()
+    def execute(self, request: TaskRequest) -> Future[TaskResult]:
+        future: Future[TaskResult] = Future()
         self.started.set()
 
         def complete() -> None:
@@ -79,9 +79,9 @@ class WorkerUnavailableStrategy:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def execute(self, request: InferenceRequest) -> Future[InferenceResult]:
-        self.calls.append(request.request_id)
-        future: Future[InferenceResult] = Future()
+    def execute(self, request: TaskRequest) -> Future[TaskResult]:
+        self.calls.append(request.task_key)
+        future: Future[TaskResult] = Future()
         future.set_exception(
             PlatformError(ErrorCode.WORKER_UNAVAILABLE, "worker exited")
         )
@@ -114,7 +114,7 @@ def test_scheduler_completes_submitted_task() -> None:
 
     assert response.status == TaskStatus.COMPLETED
     assert response.result is not None
-    assert response.result.data == {"echo": "ok"}
+    assert response.result.output == {"echo": "ok"}
 
 
 def test_terminal_query_retains_record_by_default() -> None:
@@ -139,16 +139,16 @@ def test_terminal_query_returns_isolated_copy() -> None:
         task_id = scheduler.submit(_request())
         first = scheduler.query(task_id, wait=True)
         assert first.result is not None
-        first.result.data["mutated"] = True
+        first.result.output["mutated"] = True
 
         second = scheduler.query(task_id)
     finally:
         scheduler.stop()
 
     assert second.result is not None
-    assert "mutated" not in second.result.data
+    assert "mutated" not in second.result.output
     assert scheduler.backend.get(task_id).result is not None
-    assert "mutated" not in scheduler.backend.get(task_id).result.data  # type: ignore[union-attr]
+    assert "mutated" not in scheduler.backend.get(task_id).result.output  # type: ignore[union-attr]
 
 
 def test_terminal_query_can_consume_record() -> None:
@@ -314,10 +314,10 @@ def test_scheduler_stop_retains_threads_that_miss_join_timeout() -> None:
     started = threading.Event()
 
     class StuckStrategy:
-        def execute(self, request: InferenceRequest) -> Future[InferenceResult]:
+        def execute(self, request: TaskRequest) -> Future[TaskResult]:
             started.set()
             release.wait()
-            future: Future[InferenceResult] = Future()
+            future: Future[TaskResult] = Future()
             future.set_result(_result(request))
             return future
 
@@ -348,10 +348,10 @@ def test_scheduler_last_worker_exit_fails_tasks_left_pending_after_stop_timeout(
     started = threading.Event()
 
     class StuckStrategy:
-        def execute(self, request: InferenceRequest) -> Future[InferenceResult]:
+        def execute(self, request: TaskRequest) -> Future[TaskResult]:
             started.set()
             release.wait()
-            future: Future[InferenceResult] = Future()
+            future: Future[TaskResult] = Future()
             future.set_result(_result(request))
             return future
 
@@ -610,7 +610,7 @@ def test_query_wait_raises_not_found_when_task_disappears_during_wait() -> None:
 
 def test_unexpected_execution_error_is_internal_and_releases_slot() -> None:
     class BrokenStrategy:
-        def execute(self, request) -> Future[InferenceResult]:
+        def execute(self, request) -> Future[TaskResult]:
             raise RuntimeError("broken callback")
 
         def close(self) -> None:

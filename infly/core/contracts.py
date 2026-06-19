@@ -4,23 +4,25 @@ import datetime
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Mapping, Self
+
 from infly.core.errors import ErrorCode
 
 
-
 @dataclass(slots=True, frozen=True)
-class InferenceRequest:
-    request_id: str
-    model_name: str
-    payload: Mapping[str, Any]
+class TaskRequest:
+    task_key: str
+    handler_name: str
+    input: Mapping[str, Any]
     caller: str
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
+
 @dataclass(slots=True, frozen=True)
-class InferenceResult:
-    request_id: str
-    data: Mapping[str, Any] = field(default_factory=dict)
+class TaskResult:
+    task_key: str
+    output: Mapping[str, Any] = field(default_factory=dict)
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
+
 
 class TaskStatus(StrEnum):
     PENDING = "PENDING"
@@ -32,9 +34,9 @@ class TaskStatus(StrEnum):
 @dataclass(slots=True)
 class TaskRecord:
     task_id: str
-    request: InferenceRequest
+    request: TaskRequest
     status: TaskStatus = TaskStatus.PENDING
-    result: InferenceResult | None = None
+    result: TaskResult | None = None
     error_code: ErrorCode | None = None
     error_message: str | None = None
     created_at: datetime.datetime = field(
@@ -49,7 +51,7 @@ class TaskRecord:
 class TaskQueryResponse:
     task_id: str
     status: TaskStatus
-    result: InferenceResult | None = None
+    result: TaskResult | None = None
     error_code: ErrorCode | None = None
     error_message: str | None = None
 
@@ -65,9 +67,9 @@ class TaskQueryResponse:
 
 
 __all__ = [
-    "InferenceRequest",
-    "InferenceResult",
     "TaskQueryResponse",
     "TaskRecord",
+    "TaskRequest",
+    "TaskResult",
     "TaskStatus",
 ]

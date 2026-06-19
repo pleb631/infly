@@ -7,8 +7,8 @@ import threading
 import time
 
 from infly.core.contracts import (
-    InferenceResult,
     TaskRecord,
+    TaskResult,
     TaskStatus,
 )
 from infly.core.errors import ErrorCode
@@ -49,10 +49,10 @@ class InMemoryTaskBackend:
                 raise
             self._sequence += 1
         log.info(
-            "task_submitted task_id=%s request_id=%s model=%s priority=%s",
+            "task_submitted task_id=%s task_key=%s handler=%s priority=%s",
             record.task_id,
-            record.request.request_id,
-            record.request.model_name,
+            record.request.task_key,
+            record.request.handler_name,
             priority,
         )
 
@@ -98,7 +98,7 @@ class InMemoryTaskBackend:
         task_id: str,
         status: TaskStatus,
         *,
-        result: InferenceResult | None = None,
+        result: TaskResult | None = None,
         error_code: ErrorCode | None = None,
         error_message: str | None = None,
     ) -> TaskRecord:
