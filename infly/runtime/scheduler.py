@@ -17,6 +17,12 @@ from infly.core.errors import ErrorCode, PlatformError
 from infly.core.ports import ExecutionStrategy, TaskBackend
 from infly.runtime.config import SchedulerConfig
 from infly.runtime.log import get_logger
+from infly.runtime.observability import (
+    HealthStatus,
+    RuntimeInstrumentation,
+    SchedulerHealthSnapshot,
+    StrategyHealthSnapshot,
+)
 from infly.runtime.task_backend import InMemoryTaskBackend
 
 log = get_logger()
@@ -32,9 +38,11 @@ class TaskScheduler:
         *,
         backend: TaskBackend | None = None,
         scheduler_config: SchedulerConfig | None = None,
+        instrumentation: RuntimeInstrumentation | None = None,
     ) -> None:
         self._strategy = strategy
         self._scheduler_config = scheduler_config or SchedulerConfig()
+        self._instrumentation = instrumentation or RuntimeInstrumentation()
         self._backend = (
             backend
             if backend is not None
@@ -59,6 +67,10 @@ class TaskScheduler:
     @property
     def backend(self) -> TaskBackend:
         return self._backend
+
+    @property
+    def instrumentation(self) -> RuntimeInstrumentation:
+        return self._instrumentation
 
     def start(self) -> None:
         with self._lifecycle_lock:
@@ -194,6 +206,7 @@ class TaskScheduler:
                 request.handler_name,
                 priority,
             )
+            self._instrumentation.record_submitted(task_id, request)
             self._notify_waiters()
             return task_id
 
@@ -397,6 +410,7 @@ class TaskScheduler:
             return
 
         self._backend.update_status(task_id, TaskStatus.RUNNING)
+        self._instrumentation.record_started(task_id, record.request)
         log.debug(
             "task_execution_started task_id=%s task_key=%s handler=%s",
             task_id,
@@ -442,6 +456,12 @@ class TaskScheduler:
                     error_code=ErrorCode.INTERNAL_ERROR,
                     error_message=f"Worker loop failed: {exc}",
                 )
+                self._instrumentation.record_failed(
+                    task_id,
+                    record.request,
+                    error_code=ErrorCode.INTERNAL_ERROR,
+                    error_message=f"Worker loop failed: {exc}",
+                )
         except Exception as update_exc:
             log.error(
                 "worker_loop_task_update_failed task_id=%s error=%s",
@@ -459,18 +479,28 @@ class TaskScheduler:
         return ErrorCode.INTERNAL_ERROR
 
     def _fail_task(self, task_id: str, exc: Exception) -> None:
+        record = self._backend.get(task_id, copy=False)
         log.error(
             "task_execution_failed task_id=%s error=%s",
             task_id,
             exc,
             exc_info=(type(exc), exc, exc.__traceback__),
         )
+        error_code = self._execution_error_code(exc)
+        error_message = f"Execution failed: {exc}"
         self._backend.update_status(
             task_id,
             TaskStatus.FAILED,
-            error_code=self._execution_error_code(exc),
-            error_message=f"Execution failed: {exc}",
+            error_code=error_code,
+            error_message=error_message,
         )
+        if record is not None:
+            self._instrumentation.record_failed(
+                task_id,
+                record.request,
+                error_code=error_code,
+                error_message=error_message,
+            )
         self._finish_execution(task_id)
 
     def _finish_execution(self, task_id: str) -> None:
@@ -489,6 +519,7 @@ class TaskScheduler:
         task_id: str,
         execution_future: Future[TaskResult],
     ) -> None:
+        record = self._backend.get(task_id, copy=False)
         try:
             result = execution_future.result()
         except Exception as exc:
@@ -504,12 +535,21 @@ class TaskScheduler:
                 error_code=self._execution_error_code(exc),
                 error_message=f"Execution failed: {exc}",
             )
+            if record is not None:
+                self._instrumentation.record_failed(
+                    task_id,
+                    record.request,
+                    error_code=self._execution_error_code(exc),
+                    error_message=f"Execution failed: {exc}",
+                )
         else:
             self._backend.update_status(
                 task_id,
                 TaskStatus.COMPLETED,
                 result=result,
             )
+            if record is not None:
+                self._instrumentation.record_completed(task_id, record.request)
             log.debug("task_execution_completed task_id=%s", task_id)
         finally:
             self._finish_execution(task_id)
@@ -517,6 +557,50 @@ class TaskScheduler:
     def _notify_waiters(self) -> None:
         with self._condition:
             self._condition.notify_all()
+
+    def health_snapshot(self) -> SchedulerHealthSnapshot:
+        with self._threads_lock:
+            worker_threads = len(self._threads)
+
+        status_counts = {
+            task_status.value: 0
+            for task_status in TaskStatus
+        }
+        for record in self._backend.list_all():
+            status_counts[record.status.value] = (
+                status_counts.get(record.status.value, 0) + 1
+            )
+
+        strategy_snapshot = self._strategy_health_snapshot()
+        status = HealthStatus.OK
+        if self._closed or (worker_threads == 0 and not self._accepting):
+            status = HealthStatus.DOWN
+        elif strategy_snapshot is not None and strategy_snapshot.status != HealthStatus.OK:
+            status = strategy_snapshot.status
+
+        with self._outstanding_lock:
+            outstanding_tasks = len(self._outstanding_task_ids)
+
+        return SchedulerHealthSnapshot(
+            status=status,
+            accepting=self._accepting,
+            started=worker_threads > 0,
+            closed=self._closed,
+            worker_threads=worker_threads,
+            outstanding_tasks=outstanding_tasks,
+            max_outstanding_tasks=self._scheduler_config.max_outstanding_tasks,
+            backend_status_counts=status_counts,
+            strategy=strategy_snapshot,
+        )
+
+    def _strategy_health_snapshot(self) -> StrategyHealthSnapshot | None:
+        snapshot_fn = getattr(self._strategy, "health_snapshot", None)
+        if snapshot_fn is None:
+            return None
+        snapshot = snapshot_fn()
+        if isinstance(snapshot, StrategyHealthSnapshot):
+            return snapshot
+        return None
 
 
 __all__ = ["TaskScheduler"]

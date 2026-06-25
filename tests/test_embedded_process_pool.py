@@ -9,6 +9,7 @@ from infly.core.errors import ErrorCode, PlatformError
 
 from infly.core.handlers import HandlerDefinition
 from infly.runtime.log import ContextFilter, LoggingSettings
+from infly.runtime.observability import HealthStatus
 from infly.runtime.config import WorkerGroup
 from infly.runtime.registry import HandlerRegistry
 from infly.runtime.strategy.process_pool import (
@@ -299,6 +300,30 @@ def test_close_stops_logging_listener() -> None:
     pool.close()
 
     assert not pool.log_manager.listener.thread.is_alive()
+
+
+def test_health_snapshot_reports_live_workers_and_groups() -> None:
+    pool = ProcessPoolStrategy(
+        _registry(_definition("echo")),
+        [
+            WorkerGroup(name="cpu", device="cpu", process_count=2),
+            WorkerGroup(name="gpu", device="cuda:0", process_count=1),
+        ],
+    )
+    try:
+        snapshot = pool.health_snapshot()
+    finally:
+        pool.close()
+
+    assert snapshot.name == "process_pool"
+    assert snapshot.status == HealthStatus.OK
+    assert snapshot.accepting is True
+    assert snapshot.detail["total_workers"] == 3
+    assert snapshot.detail["alive_workers"] == 3
+    assert snapshot.detail["groups"]["cpu"]["configured_processes"] == 2
+    assert snapshot.detail["groups"]["cpu"]["alive_workers"] == 2
+    assert snapshot.detail["groups"]["gpu"]["configured_processes"] == 1
+    assert snapshot.detail["groups"]["gpu"]["alive_workers"] == 1
 
 
 def test_worker_loop_applies_log_context_in_worker_layer(

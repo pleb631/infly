@@ -208,6 +208,111 @@ print(response.status)
 
 运行时使用结构化日志，worker 侧会自动接入日志路由。相关实现位于 [infly/runtime/log.py](./infly/runtime/log.py)。
 
+## Health Check / Metrics / Tracing
+
+`infly` 当前提供的是库内观测能力，而不是内置 HTTP 服务。你可以直接通过 Python API 获取 health snapshot、Prometheus 文本指标和 tracing 事件，再按你的接入层暴露成 `/health`、`/metrics` 或 OpenTelemetry span。
+
+```python
+from infly import (
+    HandlerDefinition,
+    HandlerRegistry,
+    ProcessPoolStrategy,
+    RuntimeInstrumentation,
+    SchedulerConfig,
+    TaskRequest,
+    TaskScheduler,
+    WorkerGroup,
+)
+
+
+registry = HandlerRegistry()
+registry.add(
+    HandlerDefinition(
+        handler_name="echo",
+        entrypoint="my_handlers:build_echo_handler",
+    )
+)
+
+instrumentation = RuntimeInstrumentation()
+instrumentation.add_trace_sink(lambda event: print(event.name, event.task_key, event.trace_id))
+
+scheduler = TaskScheduler(
+    ProcessPoolStrategy(
+        registry,
+        [WorkerGroup(name="cpu", device="cpu", process_count=2, handlers=["echo"])],
+    ),
+    scheduler_config=SchedulerConfig(num_workers=2),
+    instrumentation=instrumentation,
+)
+
+scheduler.start()
+try:
+    result = scheduler.submit_and_wait(
+        TaskRequest(
+            task_key="health-demo",
+            handler_name="echo",
+            input={"text": "hello"},
+            caller="api",
+            metadata={"trace_id": "trace-health-demo"},
+        )
+    )
+    print(result.output)
+
+    health = scheduler.health_snapshot()
+    print(health.status)
+    print(health.backend_status_counts)
+
+    metrics = instrumentation.metrics_snapshot()
+    print(metrics.submitted_total, metrics.completed_total)
+
+    prometheus_text = instrumentation.render_prometheus_text()
+    print(prometheus_text)
+finally:
+    scheduler.stop()
+```
+
+当前 trace sink 会收到以下生命周期事件：
+
+- `task.submitted`
+- `task.started`
+- `task.completed`
+- `task.failed`
+
+如果你要桥接到 HTTP：
+
+- `/health`：返回 `scheduler.health_snapshot()`
+- `/metrics`：返回 `instrumentation.render_prometheus_text()`
+- tracing：在 `add_trace_sink()` 里把 `TraceEvent` 转成你自己的 span 或 structured event
+
+如果你只是想本地手动看一眼观测输出，可以直接运行：
+
+```bash
+python scripts/demo_observability.py
+```
+
+这个 demo 会打印：
+
+- 一个成功任务的结果
+- 一个失败任务的错误信息
+- scheduler / strategy 的 health snapshot
+- metrics snapshot 和 Prometheus 文本
+- `task.submitted`、`task.started`、`task.completed`、`task.failed` 这些 trace 事件
+
+如果你想看一个更贴近真实接入流程的最小示例，可以直接运行：
+
+```bash
+python scripts/demo_quickstart.py
+```
+
+这个 demo 会完整演示：
+
+- 注册两个 handler
+- 用 `ProcessPoolStrategy` 和 `WorkerGroup` 启动 worker
+- 同步提交一个成功任务
+- 异步提交一个任务并用 `query(..., wait=True)` 读取结果
+- 提交一个失败任务并观察错误传播
+- 打印 health / metrics / Prometheus / trace 事件
+
 ## 测试
 
 ```bash

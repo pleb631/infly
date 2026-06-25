@@ -10,6 +10,14 @@ from .runtime.config import (
     WorkerSafetyPolicy,
 )
 from .runtime.log import get_logger, configure_logging
+from .runtime.observability import (
+    HealthStatus,
+    RuntimeInstrumentation,
+    RuntimeMetricsSnapshot,
+    SchedulerHealthSnapshot,
+    StrategyHealthSnapshot,
+    TraceEvent,
+)
 from .runtime.registry import HandlerRegistry
 from .runtime.scheduler import TaskScheduler
 from .runtime.executor import HandlerExecutor
@@ -35,6 +43,12 @@ __all__ = [
     "WorkerSafetyPolicy",
     "get_logger",
     "configure_logging",
+    "HealthStatus",
+    "RuntimeInstrumentation",
+    "RuntimeMetricsSnapshot",
+    "SchedulerHealthSnapshot",
+    "StrategyHealthSnapshot",
+    "TraceEvent",
     "HandlerRegistry",
     "TaskScheduler",
     "HandlerExecutor",
@@ -42,4 +56,4 @@ __all__ = [
 ]
 
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"

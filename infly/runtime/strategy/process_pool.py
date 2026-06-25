@@ -27,6 +27,7 @@ from infly.runtime.log import (
     setup_main_logging,
     setup_worker_logging,
 )
+from infly.runtime.observability import HealthStatus, StrategyHealthSnapshot
 
 
 def _dump_error_code(code: object) -> object:
@@ -477,6 +478,63 @@ class ProcessPoolStrategy:
     @property
     def log_manager(self) -> MainLogManager:
         return self._log_manager
+
+    def health_snapshot(self) -> StrategyHealthSnapshot:
+        with self._lock:
+            total_workers = len(self._workers)
+            alive_workers = sum(
+                1
+                for worker in self._workers.values()
+                if worker.alive
+                and worker.process is not None
+                and worker.process.is_alive()
+            )
+            restarting_workers = sum(
+                1
+                for worker in self._workers.values()
+                if worker.next_restart_at is not None
+            )
+            degraded_workers = total_workers - alive_workers - restarting_workers
+
+            if self._close_complete or (not self._accepting and alive_workers == 0):
+                status = HealthStatus.DOWN
+            elif alive_workers == total_workers:
+                status = HealthStatus.OK
+            else:
+                status = HealthStatus.DEGRADED
+
+            groups: dict[str, dict[str, int | bool]] = {}
+            for group_name, group in self._groups.items():
+                group_workers = [
+                    worker
+                    for worker in self._workers.values()
+                    if worker.group.name == group_name
+                ]
+                group_alive = sum(
+                    1
+                    for worker in group_workers
+                    if worker.alive
+                    and worker.process is not None
+                    and worker.process.is_alive()
+                )
+                groups[group_name] = {
+                    "configured_processes": group.process_count,
+                    "alive_workers": group_alive,
+                    "accepting": self._accepting,
+                }
+
+        return StrategyHealthSnapshot(
+            name=self.name,
+            status=status,
+            accepting=self._accepting,
+            detail={
+                "total_workers": total_workers,
+                "alive_workers": alive_workers,
+                "restarting_workers": restarting_workers,
+                "degraded_workers": max(degraded_workers, 0),
+                "groups": groups,
+            },
+        )
 
     def _launch_worker(self, worker: _WorkerState) -> None:
         worker.generation += 1
