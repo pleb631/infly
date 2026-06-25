@@ -1,19 +1,29 @@
 # infly
 
-`infly` 是一个面向 Python 3.12+ 的轻量推理运行时。它提供 handler 注册、动态加载、任务调度、进程池执行、任务状态查询和结构化日志路由，适合把推理逻辑封装成可调度的运行单元。
+`infly` 是一个面向 Python 3.12+ 的轻量推理运行时，适合把模型调用、规则处理或其他可执行逻辑封装成统一的 `handler`，再交给调度器提交、执行、查询和观测。
 
-## 主要能力
+它提供的不是一整套 HTTP 服务，而是一层清晰的运行时内核：你可以把它接到 API、任务系统、批处理流程或内部平台里，用一致的方式管理任务生命周期、进程池执行和运行时观测。
 
-- `HandlerDefinition` / `HandlerRegistry`：注册和管理可执行 handler
-- `TaskRequest` / `TaskResult` / `TaskRecord` / `TaskStatus`：描述任务请求、执行结果和生命周期
-- `TaskScheduler`：负责提交、排队、查询和等待任务
-- `ProcessPoolStrategy`：在独立进程中执行 handler
-- `WorkerGroup` / `WorkerSafetyPolicy` / `SchedulerConfig`：控制 worker 分组、扩缩容和调度限制
-- `ErrorCode` / `PlatformError`：统一错误表达
+## 核心能力
+
+- `HandlerDefinition` / `HandlerRegistry`
+  用来声明、注册和管理可执行 handler。
+- `TaskRequest` / `TaskResult` / `TaskRecord` / `TaskStatus`
+  用来描述任务请求、执行结果和任务状态。
+- `TaskScheduler`
+  负责任务提交、排队、等待和查询。
+- `ProcessPoolStrategy`
+  负责在独立 worker 进程中执行 handler。
+- `WorkerGroup` / `WorkerSafetyPolicy` / `SchedulerConfig`
+  用来控制 worker 分组、并发度、容量限制和故障策略。
+- `RuntimeInstrumentation`
+  提供 health snapshot、metrics snapshot、Prometheus 文本和 trace event。
+- `PlatformError` / `ErrorCode`
+  提供统一错误模型。
 
 ## 安装
 
-开发环境安装：
+安装项目本体：
 
 ```bash
 pip install -e .
@@ -33,7 +43,7 @@ uv sync
 
 ## 快速开始
 
-先定义一个 handler factory。`entrypoint` 需要指向 `module:SymbolName`，这个符号应当是一个可调用对象，并返回一个带 `handle(input)` 方法的实例。
+先定义一个 handler factory。`entrypoint` 需要使用 `module:SymbolName` 形式，指向一个可调用对象，并返回一个带 `handle(input)` 方法的实例。
 
 ```python
 from collections.abc import Mapping
@@ -42,8 +52,8 @@ from typing import Any
 
 class EchoHandler:
     def __init__(self, init_context: Mapping[str, Any], **init_kwargs: Any) -> None:
-        self.init_context = init_context
-        self.init_kwargs = init_kwargs
+        self.init_context = dict(init_context)
+        self.init_kwargs = dict(init_kwargs)
 
     def handle(self, input: Mapping[str, Any]) -> dict[str, Any]:
         prefix = str(self.init_context.get("prefix", ""))
@@ -57,15 +67,18 @@ def build_echo_handler(
     return EchoHandler(init_context, **init_kwargs)
 ```
 
-注册 handler，然后用进程池策略和调度器执行它：
+然后注册 handler，并通过顶层公共 API 启动运行时：
 
 ```python
-from infly.core.contracts import TaskRequest
-from infly.core.handlers import HandlerDefinition
-from infly.runtime.config import SchedulerConfig, WorkerGroup
-from infly.runtime.registry import HandlerRegistry
-from infly.runtime.scheduler import TaskScheduler
-from infly.runtime.strategy import ProcessPoolStrategy
+from infly import (
+    HandlerDefinition,
+    HandlerRegistry,
+    ProcessPoolStrategy,
+    SchedulerConfig,
+    TaskRequest,
+    TaskScheduler,
+    WorkerGroup,
+)
 
 
 registry = HandlerRegistry()
@@ -120,7 +133,7 @@ finally:
 
 ## 查询任务
 
-`submit()` 会返回一个 `task_id`，之后可以单独查询。
+`submit()` 会返回一个 `task_id`，之后你可以按需查询当前状态或等待终态结果：
 
 ```python
 task_id = scheduler.submit(
@@ -137,80 +150,15 @@ response = scheduler.query(task_id)
 print(response.status)
 ```
 
-常用的查询方式：
+常见查询方式：
 
 - `query(task_id)`：立即返回当前快照
-- `query(task_id, wait=True)`：等待直到任务进入终态
-- `query(task_id, wait=True, consume=True)`：读取一次后从后端移除
+- `query(task_id, wait=True)`：等待任务进入终态
+- `query(task_id, wait=True, consume=True)`：读取一次后从后端消费掉终态记录
 
-## 核心概念
+## 可观测性
 
-### HandlerDefinition
-
-`HandlerDefinition` 描述一个可加载的 handler。
-
-- `handler_name`：调度时使用的名称
-- `entrypoint`：`module:SymbolName` 形式的入口
-- `init_context`：构造 handler 时传入的上下文
-- `init_kwargs`：构造 handler 时传入的额外关键字参数
-- `metadata`：附加元数据
-
-`runtime_context` 是保留键，不应手动放进 `init_context`。进程池在 worker 侧会自动注入它。
-
-### WorkerGroup
-
-`WorkerGroup` 决定 worker 如何启动和分组。
-
-- `name`：唯一的 worker 组名
-- `device`：暴露给 worker 的设备标识，会写入 `INFLY_DEVICE`
-- `process_count`：该组启动的 worker 进程数
-- `handlers`：该组允许执行的 handler 名称列表。为空时表示执行所有已注册 handler
-- `environment`：注入 worker 进程的额外环境变量
-- `safety`：worker 退出后的重启或降级策略
-
-### TaskScheduler
-
-`TaskScheduler` 负责管理任务生命周期。
-
-- `start()`：启动后台 worker 线程
-- `submit()`：提交任务并返回 `task_id`
-- `submit_and_wait()`：提交任务并等待最终结果
-- `query()`：查询任务状态或结果
-- `stop()`：停止调度器并关闭底层 strategy
-
-### ProcessPoolStrategy
-
-`ProcessPoolStrategy` 是内置的进程池执行策略。
-
-- 会在独立进程中预加载 handler
-- 会把 `group_name`、`worker_id` 和 `device` 注入 worker runtime context
-- 会设置 worker 进程名，并启用结构化日志路由
-- 支持 worker 崩溃后的重启或降级，具体取决于 `WorkerSafetyPolicy`
-
-## 错误处理
-
-常见的 `ErrorCode` 包括：
-
-- `HANDLER_NOT_FOUND`
-- `NOT_FOUND`
-- `OVERLOADED`
-- `TIMEOUT`
-- `WORKER_UNAVAILABLE`
-- `INVALID_ARGUMENT`
-- `INVALID_CONFIGURATION`
-- `INVALID_STATE`
-- `INVALID_REQUEST`
-- `INTERNAL_ERROR`
-
-调用失败时通常会抛出 `PlatformError`，可通过 `exc.code` 读取错误码。
-
-## 日志
-
-运行时使用结构化日志，worker 侧会自动接入日志路由。相关实现位于 [infly/runtime/log.py](./infly/runtime/log.py)。
-
-## Health Check / Metrics / Tracing
-
-`infly` 当前提供的是库内观测能力，而不是内置 HTTP 服务。你可以直接通过 Python API 获取 health snapshot、Prometheus 文本指标和 tracing 事件，再按你的接入层暴露成 `/health`、`/metrics` 或 OpenTelemetry span。
+`infly` 内置的是运行时观测能力，而不是预制的 `/health` 或 `/metrics` HTTP 服务。你可以从 Python API 直接拿到 health、metrics 和 trace event，再按自己的接入层暴露出来。
 
 ```python
 from infly import (
@@ -234,7 +182,9 @@ registry.add(
 )
 
 instrumentation = RuntimeInstrumentation()
-instrumentation.add_trace_sink(lambda event: print(event.name, event.task_key, event.trace_id))
+instrumentation.add_trace_sink(
+    lambda event: print(event.name, event.task_key, event.trace_id)
+)
 
 scheduler = TaskScheduler(
     ProcessPoolStrategy(
@@ -271,56 +221,60 @@ finally:
     scheduler.stop()
 ```
 
-当前 trace sink 会收到以下生命周期事件：
+当前 trace sink 会收到这些生命周期事件：
 
 - `task.submitted`
 - `task.started`
 - `task.completed`
 - `task.failed`
 
-如果你要桥接到 HTTP：
+如果你要对接自己的服务层，通常可以这样映射：
 
 - `/health`：返回 `scheduler.health_snapshot()`
 - `/metrics`：返回 `instrumentation.render_prometheus_text()`
-- tracing：在 `add_trace_sink()` 里把 `TraceEvent` 转成你自己的 span 或 structured event
+- tracing：在 `add_trace_sink()` 里把 `TraceEvent` 转成自己的 span 或结构化事件
 
-如果你只是想本地手动看一眼观测输出，可以直接运行：
+## 错误处理
+
+常见 `ErrorCode` 包括：
+
+- `HANDLER_NOT_FOUND`
+- `NOT_FOUND`
+- `OVERLOADED`
+- `TIMEOUT`
+- `WORKER_UNAVAILABLE`
+- `INVALID_ARGUMENT`
+- `INVALID_CONFIGURATION`
+- `INVALID_STATE`
+- `INVALID_REQUEST`
+- `INTERNAL_ERROR`
+
+调用失败通常会抛出 `PlatformError`，可以通过 `exc.code` 读取错误码。
+
+## Demo 脚本
+
+仓库里带了两个 demo，适合快速理解调度和观测链路：
 
 ```bash
 python scripts/demo_observability.py
-```
-
-这个 demo 会打印：
-
-- 一个成功任务的结果
-- 一个失败任务的错误信息
-- scheduler / strategy 的 health snapshot
-- metrics snapshot 和 Prometheus 文本
-- `task.submitted`、`task.started`、`task.completed`、`task.failed` 这些 trace 事件
-
-如果你想看一个更贴近真实接入流程的最小示例，可以直接运行：
-
-```bash
 python scripts/demo_quickstart.py
 ```
 
-这个 demo 会完整演示：
+`demo_observability.py` 会展示：
+
+- 一个成功任务的执行结果
+- 一个失败任务的错误信息
+- scheduler / strategy health snapshot
+- metrics snapshot 和 Prometheus 文本
+- `task.submitted`、`task.started`、`task.completed`、`task.failed` 这些 trace event
+
+`demo_quickstart.py` 会展示：
 
 - 注册两个 handler
 - 用 `ProcessPoolStrategy` 和 `WorkerGroup` 启动 worker
 - 同步提交一个成功任务
 - 异步提交一个任务并用 `query(..., wait=True)` 读取结果
 - 提交一个失败任务并观察错误传播
-- 打印 health / metrics / Prometheus / trace 事件
+- 打印 health / metrics / Prometheus / trace 输出
 
-## 测试
-
-```bash
-pytest -q
-```
-
-## 项目结构
-
-- `infly/core`：任务契约、handler 定义、协议类型和错误码
-- `infly/runtime`：注册表、执行器、调度器、任务后端、进程池策略和日志
-- `tests`：单元测试和集成测试
+这些 demo 只是示例支撑代码，不是顶层公共 API 的一部分。
