@@ -3,6 +3,22 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import infly.demo as demo_package
+
+
+def test_demo_handlers_live_under_demo_package() -> None:
+    repo_root = Path(__file__).resolve().parent.parent
+
+    assert (repo_root / "infly" / "demo" / "handlers.py").exists()
+    assert not (repo_root / "infly" / "demo_handlers.py").exists()
+
+
+def test_demo_package_does_not_reexport_demo_handlers() -> None:
+    assert not hasattr(demo_package, "DemoEchoHandler")
+    assert not hasattr(demo_package, "DemoUnavailableHandler")
+    assert not hasattr(demo_package, "build_demo_echo_handler")
+    assert not hasattr(demo_package, "build_demo_unavailable_handler")
+
 
 def test_demo_observability_script_prints_all_sections() -> None:
     repo_root = Path(__file__).resolve().parent.parent

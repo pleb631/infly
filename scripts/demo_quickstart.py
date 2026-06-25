@@ -34,14 +34,14 @@ def main() -> int:
     registry.add(
         HandlerDefinition(
             handler_name="echo",
-            entrypoint="infly.demo_handlers:build_demo_echo_handler",
+            entrypoint="infly.demo.handlers:build_demo_echo_handler",
             init_kwargs={"prefix": "[demo] "},
         )
     )
     registry.add(
         HandlerDefinition(
             handler_name="broken",
-            entrypoint="infly.demo_handlers:build_demo_unavailable_handler",
+            entrypoint="infly.demo.handlers:build_demo_unavailable_handler",
             init_kwargs={"message": "demo worker unavailable"},
         )
     )
