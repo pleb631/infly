@@ -31,9 +31,7 @@ class HandlerRegistry:
     def list(self, handler_name: str | None = None) -> list[HandlerDefinition]:
         definitions = list(self._definitions.values())
         if handler_name is not None:
-            definitions = [
-                item for item in definitions if item.handler_name == handler_name
-            ]
+            definitions = [item for item in definitions if item.handler_name == handler_name]
         definitions = sorted(definitions, key=lambda item: item.handler_name)
         log.debug(
             "handler_list_completed filter=%s count=%s",

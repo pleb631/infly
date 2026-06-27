@@ -46,9 +46,7 @@ class WorkerSafetyPolicy:
 
     def __post_init__(self) -> None:
         if self.mode not in {"shutdown", "degrade", "restart"}:
-            raise ValueError(
-                "mode must be one of 'shutdown', 'degrade', or 'restart'"
-            )
+            raise ValueError("mode must be one of 'shutdown', 'degrade', or 'restart'")
         self.restart_limit = _require_int_at_least(
             self.restart_limit,
             0,
@@ -118,7 +116,6 @@ class SchedulerConfig:
             0,
             field_name="max_retained_terminal_tasks",
         )
-
 
 
 __all__ = [

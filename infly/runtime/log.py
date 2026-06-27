@@ -15,9 +15,7 @@ from typing import Any, ClassVar
 DEFAULT_LOG_ROOT = Path("logs/infly")
 DEFAULT_LOG_LEVEL = logging.INFO
 DEFAULT_SAVE_DAYS = 30
-DEFAULT_LOG_FORMAT = (
-    "%(asctime)s - %(name)s - %(module)s:%(lineno)d - %(levelname)s - %(message)s"
-)
+DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(module)s:%(lineno)d - %(levelname)s - %(message)s"
 APP_LOGGER_NAME = "infly"
 
 _current_log_category = ContextVar("log_category", default="")
@@ -41,6 +39,7 @@ class LoggingSettings:
         object.__setattr__(self, "log_root", Path(self.log_root))
         object.__setattr__(self, "log_level", _resolve_log_level(self.log_level))
         object.__setattr__(self, "save_days", int(self.save_days))
+
 
 _configured_logging_settings: LoggingSettings | None = None
 
@@ -161,6 +160,7 @@ def log_context(category: str = "", name: str = APP_LOGGER_NAME):
 def _safe_filename(name: str) -> str:
     return name.replace("/", "_").replace("\\", "_").replace(":", "_")
 
+
 def _install_queue_handler(
     log_queue: Queue,
     settings: LoggingSettings,
@@ -232,15 +232,10 @@ class RoutingQueueListener:
         self._sinks: list[LogRecordSink] = []
         self.lock = Lock()
         self.thread = Thread(target=self._run, daemon=True, name="InflyLogListener")
-        self._file_handler_factory = (
-            file_handler_factory or self._default_file_handler_factory
-        )
-        self._routing_key_factory = (
-            routing_key_factory or self._default_routing_key_factory
-        )
+        self._file_handler_factory = file_handler_factory or self._default_file_handler_factory
+        self._routing_key_factory = routing_key_factory or self._default_routing_key_factory
         self.console_handler = (
-            console_handler_factory
-            or (lambda: _build_console_handler(self._effective_settings(), color=True))
+            console_handler_factory or (lambda: _build_console_handler(self._effective_settings(), color=True))
         )()
 
     def _effective_settings(self) -> LoggingSettings:
@@ -387,9 +382,7 @@ def setup_main_logging(
 ) -> MainLogManager:
     effective_settings = settings or _logging_settings()
     log_queue = _create_main_log_queue(mp_context)
-    app_logger, root_handlers, root_level, root_propagate = _install_queue_handler(
-        log_queue, effective_settings
-    )
+    app_logger, root_handlers, root_level, root_propagate = _install_queue_handler(log_queue, effective_settings)
     listener = RoutingQueueListener(
         log_queue,
         settings=effective_settings,
@@ -422,11 +415,7 @@ def setup_worker_logging(
 
 def get_logger(name: str = APP_LOGGER_NAME, category: str = ""):
     normalized_name = name or APP_LOGGER_NAME
-    logger_name = (
-        APP_LOGGER_NAME
-        if normalized_name == APP_LOGGER_NAME
-        else f"{APP_LOGGER_NAME}.{normalized_name}"
-    )
+    logger_name = APP_LOGGER_NAME if normalized_name == APP_LOGGER_NAME else f"{APP_LOGGER_NAME}.{normalized_name}"
     logger = logging.getLogger(logger_name)
     logger.setLevel(logging.DEBUG)
     logger.propagate = True

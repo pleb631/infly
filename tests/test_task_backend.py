@@ -125,9 +125,7 @@ def test_read_retains_terminal_record_by_default(status: TaskStatus) -> None:
     assert first.result.output == {"answer": 42}
     assert second == first
     assert backend.get("task-1") is not None
-    assert (
-        backend.get("task-1", copy=True).updated_at == updated_at
-    )  # type: ignore[union-attr]
+    assert backend.get("task-1", copy=True).updated_at == updated_at  # type: ignore[union-attr]
 
 
 def test_read_can_atomically_consume_terminal_record() -> None:

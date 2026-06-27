@@ -36,9 +36,7 @@ class SuccessThenFailStrategy:
     def execute(self, request: TaskRequest) -> Future[TaskResult]:
         future: Future[TaskResult] = Future()
         if request.handler_name == "broken":
-            future.set_exception(
-                PlatformError(ErrorCode.WORKER_UNAVAILABLE, "worker unavailable")
-            )
+            future.set_exception(PlatformError(ErrorCode.WORKER_UNAVAILABLE, "worker unavailable"))
         else:
             future.set_result(
                 TaskResult(

@@ -149,9 +149,7 @@ def _normalize_cache_value(value: Any, *, _seen: set[int] | None = None) -> Any:
             _seen.discard(value_id)
 
     value_cls = type(value)
-    raise TypeError(
-        f"Unsupported cache_key value type: {value_cls.__module__}.{value_cls.__qualname__}"
-    )
+    raise TypeError(f"Unsupported cache_key value type: {value_cls.__module__}.{value_cls.__qualname__}")
 
 
 __all__ = ["HandlerDefinition"]

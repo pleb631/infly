@@ -101,9 +101,7 @@ class RuntimeInstrumentation:
 
     def remove_trace_sink(self, sink: TraceSink) -> None:
         with self._lock:
-            self._trace_sinks = [
-                candidate for candidate in self._trace_sinks if candidate is not sink
-            ]
+            self._trace_sinks = [candidate for candidate in self._trace_sinks if candidate is not sink]
 
     def record_submitted(self, task_id: str, request: TaskRequest) -> None:
         with self._lock:

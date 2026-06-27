@@ -29,8 +29,7 @@ def load_handler(definition: HandlerDefinition) -> HandlerProtocol:
         )
         raise PlatformError(
             ErrorCode.INVALID_CONFIGURATION,
-            f"Malformed entrypoint: '{definition.entrypoint}'."
-            f" Expected format 'module:SymbolName'.",
+            f"Malformed entrypoint: '{definition.entrypoint}'. Expected format 'module:SymbolName'.",
         )
     module_name, symbol_name = parts
     try:
@@ -66,8 +65,7 @@ def load_handler(definition: HandlerDefinition) -> HandlerProtocol:
         )
         raise PlatformError(
             ErrorCode.NOT_FOUND,
-            f"Attribute '{symbol_name}' not found in module '{module_name}' "
-            f"for entrypoint '{definition.entrypoint}'.",
+            f"Attribute '{symbol_name}' not found in module '{module_name}' for entrypoint '{definition.entrypoint}'.",
         ) from exc
     if not callable(factory):
         log.error(

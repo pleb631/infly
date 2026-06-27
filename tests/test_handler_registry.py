@@ -220,9 +220,7 @@ def test_handler_definition_allows_runtime_context_injection() -> None:
         runtime_context={"worker_id": "cpu_R0"},
     )
 
-    assert runtime_definition.init_context["runtime_context"] == {
-        "worker_id": "cpu_R0"
-    }
+    assert runtime_definition.init_context["runtime_context"] == {"worker_id": "cpu_R0"}
     assert runtime_definition.init_context["gpu"] == 0
     assert definition.init_context == {"gpu": 0}
 
@@ -340,19 +338,10 @@ def test_handler_executor_uses_default_log_context(
             and record.log_name == "infly"
             for record in caplog.records
         )
-        assert any(
-            record.message.startswith("handler_execution_started")
-            for record in caplog.records
-        )
-        assert any(
-            record.message.startswith("handler_execution_completed")
-            for record in caplog.records
-        )
+        assert any(record.message.startswith("handler_execution_started") for record in caplog.records)
+        assert any(record.message.startswith("handler_execution_completed") for record in caplog.records)
     finally:
         root.handlers = original_handlers
         root.setLevel(original_level)
         executor_logger.setLevel(original_executor_level)
         handler_loader_logger.setLevel(original_handler_loader_level)
-
-
-

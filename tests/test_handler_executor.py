@@ -134,4 +134,3 @@ def test_worker_group_accepts_handlers_and_rejects_duplicates() -> None:
 
     with pytest.raises(ValueError, match="duplicates"):
         WorkerGroup(name="cpu", device="cpu", handlers=["echo", "echo"])
-

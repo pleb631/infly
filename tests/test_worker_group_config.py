@@ -44,5 +44,3 @@ def test_worker_group_coerces_nested_safety_mapping() -> None:
 def test_scheduler_config_rejects_invalid_values(kwargs) -> None:
     with pytest.raises(ValueError):
         SchedulerConfig(**kwargs)
-
-

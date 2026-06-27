@@ -25,9 +25,7 @@ def _request(task_key: str = "req-1") -> TaskRequest:
     )
 
 
-def _wait_for_status(
-    scheduler: TaskScheduler, task_id: str, *statuses: TaskStatus
-) -> object:
+def _wait_for_status(scheduler: TaskScheduler, task_id: str, *statuses: TaskStatus) -> object:
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
         response = scheduler.query(task_id)
@@ -82,18 +80,14 @@ class WorkerUnavailableStrategy:
     def execute(self, request: TaskRequest) -> Future[TaskResult]:
         self.calls.append(request.task_key)
         future: Future[TaskResult] = Future()
-        future.set_exception(
-            PlatformError(ErrorCode.WORKER_UNAVAILABLE, "worker exited")
-        )
+        future.set_exception(PlatformError(ErrorCode.WORKER_UNAVAILABLE, "worker exited"))
         return future
 
     def close(self) -> None:
         pass
 
 
-def _scheduler(
-    strategy: object, *, max_outstanding_tasks: int = 8
-) -> TaskScheduler:
+def _scheduler(strategy: object, *, max_outstanding_tasks: int = 8) -> TaskScheduler:
     return TaskScheduler(
         strategy,  # type: ignore[arg-type]
         scheduler_config=SchedulerConfig(
@@ -417,9 +411,7 @@ def test_pending_tasks_consume_outstanding_slots() -> None:
         scheduler.submit(_request("rejected"))
 
     assert caught.value.code == ErrorCode.OVERLOADED
-    assert [record.task_id for record in scheduler.backend.list_all()] == [
-        accepted_task_id
-    ]
+    assert [record.task_id for record in scheduler.backend.list_all()] == [accepted_task_id]
 
 
 def test_submit_accepts_priority_as_keyword_argument() -> None:

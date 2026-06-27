@@ -81,10 +81,7 @@ def test_pool_injects_distinct_worker_context_without_mutating_registry() -> Non
         ],
     )
     try:
-        results = [
-            pool.execute(_request(f"request-{index}")).result(timeout=3)
-            for index in range(4)
-        ]
+        results = [pool.execute(_request(f"request-{index}")).result(timeout=3) for index in range(4)]
     finally:
         pool.close()
 
@@ -93,9 +90,7 @@ def test_pool_injects_distinct_worker_context_without_mutating_registry() -> Non
     assert {context["device"] for context in contexts} == {"cuda:7"}
     assert {context["worker_id"] for context in contexts} == {"gpu_R0", "gpu_R1"}
     assert {result.output["environment_device"] for result in results} == {"cuda:7"}
-    assert {result.output["custom_environment"] for result in results} == {
-        "configured"
-    }
+    assert {result.output["custom_environment"] for result in results} == {"configured"}
     assert definition.init_context == {}
 
 
@@ -194,9 +189,7 @@ def test_abort_startup_closes_worker_and_result_queues(monkeypatch) -> None:
 
 
 def test_pool_startup_timeout_is_internal_error() -> None:
-    registry = _registry(
-        _definition("slow", "SlowInitHandler", delay_seconds=1)
-    )
+    registry = _registry(_definition("slow", "SlowInitHandler", delay_seconds=1))
 
     with pytest.raises(PlatformError) as caught:
         ProcessPoolStrategy(
@@ -238,16 +231,11 @@ def test_cross_group_routing_is_weighted_by_live_process_count() -> None:
         ],
     )
     try:
-        results = [
-            pool.execute(_request(f"weighted-{index}")).result(timeout=3)
-            for index in range(6)
-        ]
+        results = [pool.execute(_request(f"weighted-{index}")).result(timeout=3) for index in range(6)]
     finally:
         pool.close()
 
-    group_names = [
-        result.output["runtime_context"]["group_name"] for result in results
-    ]
+    group_names = [result.output["runtime_context"]["group_name"] for result in results]
     assert group_names.count("small") == 2
     assert group_names.count("large") == 4
 
@@ -416,7 +404,3 @@ def test_worker_loop_applies_log_context_in_worker_layer(
     assert lifecycle_queue.put_items[0].kind == "READY"
     assert result_queue.put_items[0].ok is True
     assert result_queue.put_items[0].payload.task_key == "req-1"
-
-
-
-

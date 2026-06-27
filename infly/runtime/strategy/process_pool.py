@@ -284,8 +284,7 @@ class ProcessPoolStrategy:
                     except PlatformError as exc:
                         raise PlatformError(
                             ErrorCode.INTERNAL_ERROR,
-                            f"WorkerGroup '{group.name}' references missing handler "
-                            f"'{handler_name}'",
+                            f"WorkerGroup '{group.name}' references missing handler '{handler_name}'",
                         ) from exc
                     self._handler_groups[handler_name].append(group.name)
                 self._group_handlers[group.name] = handler_names
@@ -390,8 +389,7 @@ class ProcessPoolStrategy:
                         worker.outstanding -= 1
                         self._assignments.pop(request.task_key, None)
                         log.warning(
-                            "request_assignment_failed task_key=%s worker_id=%s "
-                            "generation=%s error=%s",
+                            "request_assignment_failed task_key=%s worker_id=%s generation=%s error=%s",
                             request.task_key,
                             worker.worker_id,
                             worker.generation,
@@ -400,9 +398,7 @@ class ProcessPoolStrategy:
                         )
                         continue
 
-                    self._group_cursors[group_name] = (
-                        worker.index + 1
-                    ) % worker.group.process_count
+                    self._group_cursors[group_name] = (worker.index + 1) % worker.group.process_count
                     log.debug(
                         "request_assigned task_key=%s handler=%s worker_id=%s generation=%s",
                         request.task_key,
@@ -422,8 +418,7 @@ class ProcessPoolStrategy:
             future.set_exception(
                 PlatformError(
                     ErrorCode.WORKER_UNAVAILABLE,
-                    f"Unable to submit request to a live worker for handler "
-                    f"'{request.handler_name}'",
+                    f"Unable to submit request to a live worker for handler '{request.handler_name}'",
                 )
             )
             return future
@@ -450,10 +445,7 @@ class ProcessPoolStrategy:
         self._result_stop.set()
         if hasattr(self, "_result_thread"):
             self._result_thread.join(timeout=2)
-        if (
-            hasattr(self, "_supervisor_thread")
-            and threading.current_thread() is not self._supervisor_thread
-        ):
+        if hasattr(self, "_supervisor_thread") and threading.current_thread() is not self._supervisor_thread:
             self._supervisor_thread.join(timeout=2)
 
         self._fail_all_pending(
@@ -480,9 +472,7 @@ class ProcessPoolStrategy:
                 for worker in self._workers.values()
                 if worker.alive and worker.process is not None and worker.process.is_alive()
             )
-            restarting_workers = sum(
-                1 for worker in self._workers.values() if worker.next_restart_at is not None
-            )
+            restarting_workers = sum(1 for worker in self._workers.values() if worker.next_restart_at is not None)
             degraded_workers = total_workers - alive_workers - restarting_workers
 
             if self._close_complete or (not self._accepting and alive_workers == 0):
@@ -494,9 +484,7 @@ class ProcessPoolStrategy:
 
             groups: dict[str, dict[str, int | bool]] = {}
             for group_name, group in self._groups.items():
-                group_workers = [
-                    worker for worker in self._workers.values() if worker.group.name == group_name
-                ]
+                group_workers = [worker for worker in self._workers.values() if worker.group.name == group_name]
                 group_alive = sum(
                     1
                     for worker in group_workers
@@ -620,8 +608,7 @@ class ProcessPoolStrategy:
             )
             raise PlatformError(
                 ErrorCode.INTERNAL_ERROR,
-                f"Worker '{worker.worker_id}' startup failed: "
-                f"{message.error_message or 'unknown error'}",
+                f"Worker '{worker.worker_id}' startup failed: {message.error_message or 'unknown error'}",
             )
         worker.alive = True
         log.info(
@@ -702,9 +689,7 @@ class ProcessPoolStrategy:
         ]
 
     def _select_group_locked(self, group_names: list[str]) -> str:
-        weights = {
-            group_name: len(self._alive_workers_locked(group_name)) for group_name in group_names
-        }
+        weights = {group_name: len(self._alive_workers_locked(group_name)) for group_name in group_names}
         total_weight = sum(weights.values())
         for group_name, weight in weights.items():
             self._smooth_weights[group_name] += weight
@@ -801,11 +786,7 @@ class ProcessPoolStrategy:
                     return
                 if worker.alive and not worker.process.is_alive():
                     self._handle_worker_exit(worker, now)
-                elif (
-                    not worker.alive
-                    and worker.next_restart_at is not None
-                    and now >= worker.next_restart_at
-                ):
+                elif not worker.alive and worker.next_restart_at is not None and now >= worker.next_restart_at:
                     self._restart_worker(worker)
 
     def _handle_worker_exit(

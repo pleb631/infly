@@ -14,8 +14,7 @@ from infly.core.errors import ErrorCode
 
 
 class HandlerProtocol(Protocol):
-    def handle(self, input: Mapping[str, Any]) -> Mapping[str, Any]:
-        ...
+    def handle(self, input: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
 
 class HandlerFactory(Protocol):
@@ -23,35 +22,28 @@ class HandlerFactory(Protocol):
         self,
         init_context: Mapping[str, Any],
         **kwargs: Any,
-    ) -> HandlerProtocol:
-        ...
+    ) -> HandlerProtocol: ...
 
 
 class ExecutionStrategy(Protocol):
-    def execute(self, request: TaskRequest) -> Future[TaskResult]:
-        ...
+    def execute(self, request: TaskRequest) -> Future[TaskResult]: ...
 
-    def close(self) -> None:
-        ...
+    def close(self) -> None: ...
 
 
 class TaskBackend(Protocol):
-    def submit(self, record: TaskRecord, priority: int = 0) -> None:
-        ...
+    def submit(self, record: TaskRecord, priority: int = 0) -> None: ...
 
-    def pull(self) -> str | None:
-        ...
+    def pull(self) -> str | None: ...
 
-    def get(self, task_id: str, copy: bool = False) -> TaskRecord | None:
-        ...
+    def get(self, task_id: str, copy: bool = False) -> TaskRecord | None: ...
 
     def read(
         self,
         task_id: str,
         *,
         consume: bool = False,
-    ) -> TaskRecord | None:
-        ...
+    ) -> TaskRecord | None: ...
 
     def update_status(
         self,
@@ -61,11 +53,9 @@ class TaskBackend(Protocol):
         result: TaskResult | None = None,
         error_code: ErrorCode | None = None,
         error_message: str | None = None,
-    ) -> TaskRecord:
-        ...
+    ) -> TaskRecord: ...
 
-    def list_all(self) -> list[TaskRecord]:
-        ...
+    def list_all(self) -> list[TaskRecord]: ...
 
 
 __all__ = [

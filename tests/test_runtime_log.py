@@ -95,9 +95,7 @@ def test_routing_queue_listener_routes_records_by_category_and_name(monkeypatch)
         "hello",
         "hello",
     ]
-    assert [record.msg for record in file_handlers[("task", "job-2")].records] == [
-        "hello"
-    ]
+    assert [record.msg for record in file_handlers[("task", "job-2")].records] == ["hello"]
     assert len(console_handler.records) == 3
 
 
@@ -159,12 +157,8 @@ def test_routing_queue_listener_can_customize_routing_and_handlers(monkeypatch) 
         "worker:gpu_R0:101:201",
         "worker:gpu_R0:102:202",
     ]
-    assert [record.process for record in file_handlers["worker:gpu_R0:101:201"].records] == [
-        101
-    ]
-    assert [record.thread for record in file_handlers["worker:gpu_R0:102:202"].records] == [
-        202
-    ]
+    assert [record.process for record in file_handlers["worker:gpu_R0:101:201"].records] == [101]
+    assert [record.thread for record in file_handlers["worker:gpu_R0:102:202"].records] == [202]
     assert len(console_handler.records) == 2
 
 
@@ -258,17 +252,11 @@ def test_setup_main_logging_installs_queue_handler_and_cleans_up_component_logge
     try:
         assert context.calls == [-1]
         assert manager.queue is context.queue
-        assert any(
-            isinstance(handler, runtime_log.QueueHandler)
-            for handler in component_logger.handlers
-        )
+        assert any(isinstance(handler, runtime_log.QueueHandler) for handler in component_logger.handlers)
         assert component_logger.level == logging.DEBUG
         assert component_logger.propagate is False
         manager.stop()
-        assert not any(
-            isinstance(handler, runtime_log.QueueHandler)
-            for handler in component_logger.handlers
-        )
+        assert not any(isinstance(handler, runtime_log.QueueHandler) for handler in component_logger.handlers)
         assert component_logger.level == logging.NOTSET
         assert component_logger.propagate is True
         assert context.queue.closed is True

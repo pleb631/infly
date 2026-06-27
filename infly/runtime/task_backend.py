@@ -34,9 +34,7 @@ class InMemoryTaskBackend:
     def submit(self, record: TaskRecord, priority: int = 0) -> None:
         with self._lock:
             if record.task_id in self._records:
-                log.warning(
-                    "task_submit_rejected task_id=%s reason=duplicate", record.task_id
-                )
+                log.warning("task_submit_rejected task_id=%s reason=duplicate", record.task_id)
                 raise ValueError(f"Task '{record.task_id}' already exists.")
             self._records[record.task_id] = record
             try:

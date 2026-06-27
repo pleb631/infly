@@ -40,12 +40,8 @@ class TaskRecord:
     result: TaskResult | None = None
     error_code: ErrorCode | None = None
     error_message: str | None = None
-    created_at: datetime.datetime = field(
-        default_factory=lambda: datetime.datetime.now(datetime.UTC)
-    )
-    updated_at: datetime.datetime = field(
-        default_factory=lambda: datetime.datetime.now(datetime.UTC)
-    )
+    created_at: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
+    updated_at: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
 
 
 @dataclass(slots=True, frozen=True)

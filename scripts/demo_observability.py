@@ -19,9 +19,7 @@ class DemoStrategy:
     def execute(self, request: TaskRequest) -> Future[TaskResult]:
         future: Future[TaskResult] = Future()
         if request.handler_name == "broken":
-            future.set_exception(
-                PlatformError(ErrorCode.WORKER_UNAVAILABLE, "demo worker unavailable")
-            )
+            future.set_exception(PlatformError(ErrorCode.WORKER_UNAVAILABLE, "demo worker unavailable"))
         else:
             future.set_result(
                 TaskResult(

@@ -95,5 +95,3 @@ class RaisingHandler:
 
     def handle(self, input: Mapping[str, Any]) -> dict[str, Any]:
         raise RuntimeError("intentional prediction failure")
-
-

@@ -46,13 +46,9 @@ class TaskScheduler:
         self._backend = (
             backend
             if backend is not None
-            else InMemoryTaskBackend(
-                max_retained_terminal_tasks=self._scheduler_config.max_retained_terminal_tasks
-            )
+            else InMemoryTaskBackend(max_retained_terminal_tasks=self._scheduler_config.max_retained_terminal_tasks)
         )
-        self._outstanding_slots = threading.BoundedSemaphore(
-            self._scheduler_config.max_outstanding_tasks
-        )
+        self._outstanding_slots = threading.BoundedSemaphore(self._scheduler_config.max_outstanding_tasks)
         self._condition = threading.Condition()
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -126,9 +122,7 @@ class TaskScheduler:
                 remaining = max(0.0, deadline - time.monotonic())
                 thread.join(remaining)
             with self._threads_lock:
-                self._threads = [
-                    thread for thread in self._threads if thread.is_alive()
-                ]
+                self._threads = [thread for thread in self._threads if thread.is_alive()]
                 has_threads = bool(self._threads)
             if not has_threads:
                 self._fail_pending_tasks()
@@ -140,8 +134,7 @@ class TaskScheduler:
         pending_records = [
             record
             for record in self._backend.list_all()
-            if record.task_id in outstanding_task_ids
-            and record.status == TaskStatus.PENDING
+            if record.task_id in outstanding_task_ids and record.status == TaskStatus.PENDING
         ]
         for record in pending_records:
             self._backend.update_status(
@@ -291,9 +284,7 @@ class TaskScheduler:
             while True:
                 record = self._backend.get(task_id, copy=False)
                 if record is None:
-                    raise PlatformError(
-                        ErrorCode.NOT_FOUND, f"Task '{task_id}' not found."
-                    )
+                    raise PlatformError(ErrorCode.NOT_FOUND, f"Task '{task_id}' not found.")
                 if record.status in _TERMINAL_READ_STATUSES:
                     return self._read_terminal_response(
                         task_id,
@@ -302,15 +293,9 @@ class TaskScheduler:
                 if deadline is not None:
                     remaining = self._remaining_time(deadline)
                     if remaining <= 0:
-                        phase = (
-                            "start"
-                            if record.status == TaskStatus.PENDING
-                            else "complete"
-                        )
+                        phase = "start" if record.status == TaskStatus.PENDING else "complete"
                         raise self._timeout_error(task_id, phase)
-                    self._condition.wait(
-                        timeout=min(remaining, _WAIT_POLL_INTERVAL_SECONDS)
-                    )
+                    self._condition.wait(timeout=min(remaining, _WAIT_POLL_INTERVAL_SECONDS))
                 else:
                     self._condition.wait()
 
@@ -343,10 +328,7 @@ class TaskScheduler:
         if api_name is None:
             message = f"Timed out waiting for task '{task_id}' to {phase}."
         else:
-            message = (
-                f"{api_name} timed out for task '{task_id}' while waiting for task "
-                f"to {phase}."
-            )
+            message = f"{api_name} timed out for task '{task_id}' while waiting for task to {phase}."
         return PlatformError(ErrorCode.TIMEOUT, message)
 
     def _pull_task_or_none(self) -> str | None:
@@ -388,9 +370,7 @@ class TaskScheduler:
 
     def _worker_exited(self, thread: threading.Thread) -> None:
         with self._threads_lock:
-            is_last_worker = all(
-                other is thread or not other.is_alive() for other in self._threads
-            )
+            is_last_worker = all(other is thread or not other.is_alive() for other in self._threads)
             if self._stop.is_set() and is_last_worker:
                 self._fail_pending_tasks()
             if thread in self._threads:
@@ -423,9 +403,7 @@ class TaskScheduler:
             self._fail_task(task_id, exc)
             return
 
-        execution_future.add_done_callback(
-            lambda completed: self._complete_task(task_id, completed)
-        )
+        execution_future.add_done_callback(lambda completed: self._complete_task(task_id, completed))
 
     def _handle_worker_loop_task_failure(
         self,
@@ -562,14 +540,9 @@ class TaskScheduler:
         with self._threads_lock:
             worker_threads = len(self._threads)
 
-        status_counts = {
-            task_status.value: 0
-            for task_status in TaskStatus
-        }
+        status_counts = {task_status.value: 0 for task_status in TaskStatus}
         for record in self._backend.list_all():
-            status_counts[record.status.value] = (
-                status_counts.get(record.status.value, 0) + 1
-            )
+            status_counts[record.status.value] = status_counts.get(record.status.value, 0) + 1
 
         strategy_snapshot = self._strategy_health_snapshot()
         status = HealthStatus.OK

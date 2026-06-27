@@ -147,4 +147,3 @@ def test_scheduler_can_process_multiple_tasks_in_parallel() -> None:
     assert strategy.max_running == 2
     assert first_result.status == TaskStatus.COMPLETED
     assert second_result.status == TaskStatus.COMPLETED
-
