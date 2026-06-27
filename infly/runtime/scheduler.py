@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import copy as _copy
 import threading
 import time
@@ -59,6 +61,8 @@ class TaskScheduler:
         self._accepting = True
         self._strategy_closed = False
         self._closed = False
+        self._async_waiters: dict[str, asyncio.Future] = {}
+        self._async_waiters_lock = threading.Lock()
 
     @property
     def backend(self) -> TaskBackend:
@@ -144,6 +148,7 @@ class TaskScheduler:
                 error_message="Scheduler stopped before task execution started.",
             )
             self._release_outstanding_slot(record.task_id)
+            self._resolve_async_waiter(record.task_id)
         if pending_records:
             self._notify_waiters()
 
@@ -229,6 +234,50 @@ class TaskScheduler:
                 ) from exc
             raise
 
+        if terminal.status == TaskStatus.COMPLETED:
+            if terminal.result is None:
+                raise PlatformError(
+                    ErrorCode.INTERNAL_ERROR,
+                    "Task completed without a result.",
+                )
+            return terminal.result
+        raise PlatformError(
+            terminal.error_code or ErrorCode.INTERNAL_ERROR,
+            terminal.error_message or "Task execution failed.",
+        )
+
+    async def submit_and_wait_async(
+        self,
+        request: TaskRequest,
+        *,
+        priority: int = 0,
+        timeout_seconds: float | None = None,
+        consume: bool = False,
+    ) -> TaskResult:
+        self.start()
+        task_id = self.submit(request, priority=priority)
+        future = asyncio.Future()
+        with self._async_waiters_lock:
+            self._async_waiters[task_id] = future
+        try:
+            record = self._backend.get(task_id, copy=False)
+            if record is not None and record.status in _TERMINAL_READ_STATUSES:
+                self._resolve_async_waiter(task_id)
+            elif timeout_seconds is not None:
+                await asyncio.wait_for(future, timeout=timeout_seconds)
+            else:
+                await future
+        except TimeoutError:
+            raise self._timeout_error(
+                task_id,
+                "complete",
+                api_name="submit_and_wait_async",
+            ) from None
+        finally:
+            with self._async_waiters_lock:
+                self._async_waiters.pop(task_id, None)
+
+        terminal = self.query(task_id, wait=False, consume=consume)
         if terminal.status == TaskStatus.COMPLETED:
             if terminal.result is None:
                 raise PlatformError(
@@ -484,6 +533,7 @@ class TaskScheduler:
     def _finish_execution(self, task_id: str) -> None:
         self._release_outstanding_slot(task_id)
         self._notify_waiters()
+        self._resolve_async_waiter(task_id)
 
     def _release_outstanding_slot(self, task_id: str) -> None:
         with self._outstanding_lock:
@@ -535,6 +585,13 @@ class TaskScheduler:
     def _notify_waiters(self) -> None:
         with self._condition:
             self._condition.notify_all()
+
+    def _resolve_async_waiter(self, task_id: str) -> None:
+        with self._async_waiters_lock:
+            future = self._async_waiters.pop(task_id, None)
+        if future is not None and not future.done():
+            with contextlib.suppress(RuntimeError):
+                future.get_loop().call_soon_threadsafe(future.set_result, True)
 
     def health_snapshot(self) -> SchedulerHealthSnapshot:
         with self._threads_lock:
