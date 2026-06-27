@@ -108,7 +108,7 @@ scheduler = TaskScheduler(
     strategy,
     scheduler_config=SchedulerConfig(
         max_outstanding_tasks=32,
-        num_workers=2,
+        num_threads=2,
         max_retained_terminal_tasks=100,
     ),
 )
@@ -191,7 +191,7 @@ scheduler = TaskScheduler(
         registry,
         [WorkerGroup(name="cpu", device="cpu", process_count=2, handlers=["echo"])],
     ),
-    scheduler_config=SchedulerConfig(num_workers=2),
+    scheduler_config=SchedulerConfig(num_threads=2),
     instrumentation=instrumentation,
 )
 

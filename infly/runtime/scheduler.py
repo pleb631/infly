@@ -85,7 +85,7 @@ class TaskScheduler:
                     log.debug("scheduler_start_skipped reason=already_started")
                     return
             self._stop.clear()
-            for index in range(self._scheduler_config.num_workers):
+            for index in range(self._scheduler_config.num_threads):
                 name = f"scheduler-{index}"
                 thread = threading.Thread(
                     target=self._worker_loop,

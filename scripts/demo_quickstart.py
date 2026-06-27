@@ -61,7 +61,7 @@ def main() -> int:
         instrumentation=instrumentation,
         scheduler_config=SchedulerConfig(
             max_outstanding_tasks=8,
-            num_workers=1,
+            num_threads=1,
             max_retained_terminal_tasks=8,
         ),
     )

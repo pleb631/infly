@@ -5,7 +5,6 @@ from .core.errors import ErrorCode, PlatformError
 from .runtime.strategy import ProcessPoolStrategy
 from .runtime.config import (
     SchedulerConfig,
-    StrategyConfig,
     WorkerGroup,
     WorkerSafetyPolicy,
 )
@@ -38,7 +37,6 @@ __all__ = [
     "PlatformError",
     "ProcessPoolStrategy",
     "SchedulerConfig",
-    "StrategyConfig",
     "WorkerGroup",
     "WorkerSafetyPolicy",
     "get_logger",

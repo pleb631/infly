@@ -98,7 +98,7 @@ def _scheduler(
         strategy,  # type: ignore[arg-type]
         scheduler_config=SchedulerConfig(
             max_outstanding_tasks=max_outstanding_tasks,
-            num_workers=1,
+            num_threads=1,
         ),
     )
 
@@ -189,7 +189,7 @@ def test_default_backend_uses_scheduler_terminal_retention_limit() -> None:
         SuccessStrategy(),
         scheduler_config=SchedulerConfig(
             max_outstanding_tasks=2,
-            num_workers=1,
+            num_threads=1,
             max_retained_terminal_tasks=1,
         ),
     )
@@ -326,7 +326,7 @@ def test_scheduler_stop_retains_threads_that_miss_join_timeout() -> None:
 
     scheduler = TaskScheduler(
         StuckStrategy(),
-        scheduler_config=SchedulerConfig(num_workers=1),
+        scheduler_config=SchedulerConfig(num_threads=1),
     )
     scheduler.start()
     task_id = scheduler.submit(_request("stuck"))
@@ -362,7 +362,7 @@ def test_scheduler_last_worker_exit_fails_tasks_left_pending_after_stop_timeout(
         StuckStrategy(),
         scheduler_config=SchedulerConfig(
             max_outstanding_tasks=2,
-            num_workers=1,
+            num_threads=1,
         ),
     )
     scheduler.start()
@@ -646,7 +646,7 @@ def test_worker_loop_survives_transient_pull_failure() -> None:
     scheduler = TaskScheduler(
         SuccessStrategy(),
         backend=PullFailsOnceBackend(),
-        scheduler_config=SchedulerConfig(num_workers=1),
+        scheduler_config=SchedulerConfig(num_threads=1),
     )
     scheduler.start()
     try:

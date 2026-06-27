@@ -80,7 +80,7 @@ def test_submit_and_wait_runs_through_embedded_pool() -> None:
     )
     scheduler = TaskScheduler(
         pool,
-        scheduler_config=SchedulerConfig(num_workers=1),
+        scheduler_config=SchedulerConfig(num_threads=1),
     )
     scheduler.start()
     try:
@@ -109,7 +109,7 @@ def test_submit_and_wait_propagates_worker_failure() -> None:
     )
     scheduler = TaskScheduler(
         pool,
-        scheduler_config=SchedulerConfig(num_workers=1),
+        scheduler_config=SchedulerConfig(num_threads=1),
     )
     scheduler.start()
     try:
@@ -126,7 +126,7 @@ def test_scheduler_can_process_multiple_tasks_in_parallel() -> None:
     strategy = ConcurrentBlockingStrategy()
     scheduler = TaskScheduler(
         strategy,  # type: ignore[arg-type]
-        scheduler_config=SchedulerConfig(num_workers=2),
+        scheduler_config=SchedulerConfig(num_threads=2),
     )
     scheduler.start()
     try:

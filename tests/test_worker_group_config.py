@@ -2,7 +2,6 @@ import pytest
 
 from infly.runtime.config import (
     SchedulerConfig,
-    StrategyConfig,
     WorkerGroup,
     WorkerSafetyPolicy,
 )
@@ -38,7 +37,7 @@ def test_worker_group_coerces_nested_safety_mapping() -> None:
     "kwargs",
     [
         {"max_outstanding_tasks": 0},
-        {"num_workers": 0},
+        {"num_threads": 0},
         {"max_retained_terminal_tasks": -1},
     ],
 )
@@ -47,22 +46,3 @@ def test_scheduler_config_rejects_invalid_values(kwargs) -> None:
         SchedulerConfig(**kwargs)
 
 
-def test_strategy_config_coerces_worker_group_mappings() -> None:
-    config = StrategyConfig(
-        worker_groups=[
-            {
-                "name": "cpu",
-                "device": "cpu",
-                "safety": {"mode": "restart"},
-            }
-        ]
-    )
-
-    assert len(config.worker_groups) == 1
-    assert isinstance(config.worker_groups[0], WorkerGroup)
-    assert config.worker_groups[0].safety.mode == "restart"
-
-
-def test_strategy_config_rejects_non_positive_startup_timeout() -> None:
-    with pytest.raises(ValueError):
-        StrategyConfig(embedded_pool_startup_timeout_seconds=0)

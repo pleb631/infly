@@ -64,7 +64,7 @@ def test_scheduler_health_snapshot_reports_runtime_state() -> None:
     scheduler = TaskScheduler(
         SuccessThenFailStrategy(),
         instrumentation=RuntimeInstrumentation(),
-        scheduler_config=SchedulerConfig(num_workers=1),
+        scheduler_config=SchedulerConfig(num_threads=1),
     )
     scheduler.start()
     try:
@@ -92,7 +92,7 @@ def test_runtime_instrumentation_emits_trace_events_and_metrics() -> None:
     scheduler = TaskScheduler(
         SuccessThenFailStrategy(),
         instrumentation=instrumentation,
-        scheduler_config=SchedulerConfig(num_workers=1),
+        scheduler_config=SchedulerConfig(num_threads=1),
     )
     scheduler.start()
     try:

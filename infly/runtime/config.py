@@ -97,27 +97,9 @@ class WorkerGroup:
 
 
 @dataclass(slots=True)
-class StrategyConfig:
-    default_sdk_strategy: str = "embedded_process_pool"
-    worker_groups: list[WorkerGroup] = field(default_factory=list)
-    embedded_pool_startup_timeout_seconds: float = 300
-
-    def __post_init__(self) -> None:
-        self.worker_groups = [
-            group if isinstance(group, WorkerGroup) else WorkerGroup(**group)
-            for group in self.worker_groups
-        ]
-        self.embedded_pool_startup_timeout_seconds = _require_float_greater_than(
-            self.embedded_pool_startup_timeout_seconds,
-            0,
-            field_name="embedded_pool_startup_timeout_seconds",
-        )
-
-
-@dataclass(slots=True)
 class SchedulerConfig:
     max_outstanding_tasks: int = 50
-    num_workers: int = 2
+    num_threads: int = 2
     max_retained_terminal_tasks: int = 50
 
     def __post_init__(self) -> None:
@@ -126,10 +108,10 @@ class SchedulerConfig:
             1,
             field_name="max_outstanding_tasks",
         )
-        self.num_workers = _require_int_at_least(
-            self.num_workers,
+        self.num_threads = _require_int_at_least(
+            self.num_threads,
             1,
-            field_name="num_workers",
+            field_name="num_threads",
         )
         self.max_retained_terminal_tasks = _require_int_at_least(
             self.max_retained_terminal_tasks,
@@ -141,7 +123,6 @@ class SchedulerConfig:
 
 __all__ = [
     "SchedulerConfig",
-    "StrategyConfig",
     "WorkerGroup",
     "WorkerSafetyPolicy",
 ]

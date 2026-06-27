@@ -63,7 +63,7 @@ def main() -> int:
     scheduler = TaskScheduler(
         DemoStrategy(),
         instrumentation=instrumentation,
-        scheduler_config=SchedulerConfig(num_workers=1),
+        scheduler_config=SchedulerConfig(num_threads=1),
     )
 
     success_request = TaskRequest(
