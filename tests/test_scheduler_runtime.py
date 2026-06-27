@@ -5,15 +5,15 @@ from concurrent.futures import Future
 import pytest
 
 from infly.core.contracts import (
+    TaskRecord,
     TaskRequest,
     TaskResult,
-    TaskRecord,
     TaskStatus,
 )
 from infly.core.errors import ErrorCode, PlatformError
+from infly.runtime.config import SchedulerConfig
 from infly.runtime.scheduler import TaskScheduler
 from infly.runtime.task_backend import InMemoryTaskBackend
-from infly.runtime.config import SchedulerConfig
 
 
 def _request(task_key: str = "req-1") -> TaskRequest:

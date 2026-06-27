@@ -3,10 +3,11 @@ from __future__ import annotations
 import datetime
 import threading
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from statistics import fmean
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from infly.core.contracts import TaskRequest
 from infly.core.errors import ErrorCode

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from logging.handlers import QueueHandler, TimedRotatingFileHandler
 from multiprocessing import Queue
 from pathlib import Path
 from queue import Empty
 from threading import Lock, Thread
-from typing import Any, Callable
+from typing import Any, ClassVar
 
 DEFAULT_LOG_ROOT = Path("logs/infly")
 DEFAULT_LOG_LEVEL = logging.INFO
@@ -116,7 +117,7 @@ class ContextFilter(logging.Filter):
 
 
 class ColorFormatter(logging.Formatter):
-    COLORS = {
+    COLORS: ClassVar[dict[str, str]] = {
         "DEBUG": "\033[1mDEBUG\033[0m",
         "INFO": "\033[37mINFO\033[0m",
         "WARNING": "\033[33mWARNING\033[0m",
@@ -439,13 +440,13 @@ def get_logger(name: str = APP_LOGGER_NAME, category: str = ""):
 
 
 __all__ = [
+    "CategoryLoggerAdapter",
     "ColorFormatter",
     "ContextFilter",
-    "MainLogManager",
-    "LoggingSettings",
-    "RoutingQueueListener",
-    "CategoryLoggerAdapter",
     "LogRecordSink",
+    "LoggingSettings",
+    "MainLogManager",
+    "RoutingQueueListener",
     "configure_logging",
     "get_logger",
     "log_context",

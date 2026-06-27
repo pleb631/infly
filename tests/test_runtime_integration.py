@@ -1,7 +1,7 @@
 import threading
+from concurrent.futures import Future
 
 import pytest
-from concurrent.futures import Future
 
 from infly.core.contracts import TaskRequest, TaskResult, TaskStatus
 from infly.core.errors import ErrorCode, PlatformError

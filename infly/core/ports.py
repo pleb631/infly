@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from concurrent.futures import Future
 from collections.abc import Mapping
+from concurrent.futures import Future
 from typing import Any, Protocol
 
 from infly.core.contracts import (

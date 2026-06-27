@@ -114,7 +114,7 @@ class InMemoryTaskBackend:
                 error_code=error_code,
                 error_message=error_message,
                 created_at=record.created_at,
-                updated_at=datetime.datetime.now(datetime.timezone.utc),
+                updated_at=datetime.datetime.now(datetime.UTC),
             )
             self._records[task_id] = updated
             if status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:

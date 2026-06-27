@@ -289,8 +289,9 @@ def test_handler_executor_reloads_replaced_definition() -> None:
 def test_handler_executor_uses_default_log_context(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from infly.runtime.log import ContextFilter, log_context
     import logging
+
+    from infly.runtime.log import ContextFilter, log_context
 
     root = logging.getLogger()
     original_handlers = list(root.handlers)

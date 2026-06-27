@@ -5,8 +5,8 @@ from typing import Any, cast
 from infly.core.errors import ErrorCode, PlatformError
 from infly.core.handlers import HandlerDefinition
 from infly.core.ports import HandlerFactory, HandlerProtocol
-
 from infly.runtime.log import get_logger
+
 log = get_logger()
 
 
@@ -29,7 +29,8 @@ def load_handler(definition: HandlerDefinition) -> HandlerProtocol:
         )
         raise PlatformError(
             ErrorCode.INVALID_CONFIGURATION,
-            f"Malformed entrypoint: '{definition.entrypoint}'. Expected format 'module:SymbolName'.",
+            f"Malformed entrypoint: '{definition.entrypoint}'."
+            f" Expected format 'module:SymbolName'.",
         )
     module_name, symbol_name = parts
     try:
@@ -43,9 +44,7 @@ def load_handler(definition: HandlerDefinition) -> HandlerProtocol:
             exc_info=True,
         )
         missing_name = exc.name or ""
-        if missing_name != module_name and not module_name.startswith(
-            f"{missing_name}."
-        ):
+        if missing_name != module_name and not module_name.startswith(f"{missing_name}."):
             raise PlatformError(
                 ErrorCode.INTERNAL_ERROR,
                 f"Module '{module_name}' could not be imported because dependency "
@@ -67,7 +66,8 @@ def load_handler(definition: HandlerDefinition) -> HandlerProtocol:
         )
         raise PlatformError(
             ErrorCode.NOT_FOUND,
-            f"Attribute '{symbol_name}' not found in module '{module_name}' for entrypoint '{definition.entrypoint}'.",
+            f"Attribute '{symbol_name}' not found in module '{module_name}' "
+            f"for entrypoint '{definition.entrypoint}'.",
         ) from exc
     if not callable(factory):
         log.error(
@@ -110,7 +110,7 @@ def load_handler(definition: HandlerDefinition) -> HandlerProtocol:
             "handle(input) method.",
         )
     log.info("handler_load_completed handler=%s", definition.handler_name)
-    return cast(HandlerProtocol, handler)
+    return handler
 
 
 __all__ = ["load_handler"]

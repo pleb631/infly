@@ -11,8 +11,8 @@ from infly import (
     SchedulerConfig,
     TaskRequest,
     TaskScheduler,
+    TraceEvent,
     WorkerGroup,
-    TraceEvent
 )
 
 

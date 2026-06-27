@@ -6,11 +6,10 @@ import pytest
 
 from infly.core.contracts import TaskRequest, TaskResult
 from infly.core.errors import ErrorCode, PlatformError
-
 from infly.core.handlers import HandlerDefinition
+from infly.runtime.config import WorkerGroup
 from infly.runtime.log import ContextFilter, LoggingSettings
 from infly.runtime.observability import HealthStatus
-from infly.runtime.config import WorkerGroup
 from infly.runtime.registry import HandlerRegistry
 from infly.runtime.strategy.process_pool import (
     ProcessPoolStrategy,

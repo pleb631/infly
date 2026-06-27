@@ -6,28 +6,30 @@ import threading
 import time
 from collections import defaultdict, deque
 from collections.abc import Mapping
-from dataclasses import dataclass, field
 from concurrent.futures import Future
-from multiprocessing import get_context, Queue
+from contextlib import suppress
+from dataclasses import dataclass, field
+from multiprocessing import Queue, get_context
 from queue import Empty
 from typing import Any
+
 from setproctitle import setproctitle
 
 from infly.core.contracts import TaskRequest, TaskResult
 from infly.core.errors import ErrorCode, PlatformError
 from infly.core.handlers import HandlerDefinition
 from infly.runtime.config import WorkerGroup
-from infly.runtime.registry import HandlerRegistry
 from infly.runtime.executor import HandlerExecutor
 from infly.runtime.log import (
-    MainLogManager,
     LoggingSettings,
+    MainLogManager,
     get_logger,
     log_context,
     setup_main_logging,
     setup_worker_logging,
 )
 from infly.runtime.observability import HealthStatus, StrategyHealthSnapshot
+from infly.runtime.registry import HandlerRegistry
 
 
 def _dump_error_code(code: object) -> object:
@@ -86,7 +88,7 @@ def _worker_loop(
     device: str,
     parent_sys_path: list[str],
     parent_cwd: str,
-    log_queue: object,
+    log_queue: Queue,
     log_settings: LoggingSettings,
 ) -> None:
 
@@ -183,9 +185,7 @@ def _worker_loop(
             result_queue.put(
                 WorkerResultMessage(
                     ok=False,
-                    error_code=_dump_error_code(
-                        getattr(exc, "code", ErrorCode.INTERNAL_ERROR)
-                    ),
+                    error_code=_dump_error_code(getattr(exc, "code", ErrorCode.INTERNAL_ERROR)),
                     error_message=str(exc),
                     task_key=request.task_key,
                     worker_id=worker_id,
@@ -275,9 +275,7 @@ class ProcessPoolStrategy:
                 )
 
             self._groups = {group.name: group for group in worker_groups}
-            all_handler_names = tuple(
-                definition.handler_name for definition in registry.list()
-            )
+            all_handler_names = tuple(definition.handler_name for definition in registry.list())
             for group in worker_groups:
                 handler_names = tuple(group.handlers) if group.handlers else all_handler_names
                 for handler_name in handler_names:
@@ -406,8 +404,7 @@ class ProcessPoolStrategy:
                         worker.index + 1
                     ) % worker.group.process_count
                     log.debug(
-                        "request_assigned task_key=%s handler=%s worker_id=%s "
-                        "generation=%s",
+                        "request_assigned task_key=%s handler=%s worker_id=%s generation=%s",
                         request.task_key,
                         request.handler_name,
                         worker.worker_id,
@@ -439,17 +436,13 @@ class ProcessPoolStrategy:
             self._accepting = False
             self._closing = True
 
-        log.info(
-            "pool_closing workers=%s pending=%s", len(self._workers), len(self._futures)
-        )
+        log.info("pool_closing workers=%s pending=%s", len(self._workers), len(self._futures))
         self._supervisor_stop.set()
         for worker in self._workers.values():
             if worker.process is None or not worker.process.is_alive():
                 continue
-            try:
+            with suppress(Exception):
                 worker.task_queue.put(None, timeout=0.2)
-            except Exception:
-                pass
 
         for worker in self._workers.values():
             self._stop_process(worker, terminate_after=1)
@@ -485,14 +478,10 @@ class ProcessPoolStrategy:
             alive_workers = sum(
                 1
                 for worker in self._workers.values()
-                if worker.alive
-                and worker.process is not None
-                and worker.process.is_alive()
+                if worker.alive and worker.process is not None and worker.process.is_alive()
             )
             restarting_workers = sum(
-                1
-                for worker in self._workers.values()
-                if worker.next_restart_at is not None
+                1 for worker in self._workers.values() if worker.next_restart_at is not None
             )
             degraded_workers = total_workers - alive_workers - restarting_workers
 
@@ -506,16 +495,12 @@ class ProcessPoolStrategy:
             groups: dict[str, dict[str, int | bool]] = {}
             for group_name, group in self._groups.items():
                 group_workers = [
-                    worker
-                    for worker in self._workers.values()
-                    if worker.group.name == group_name
+                    worker for worker in self._workers.values() if worker.group.name == group_name
                 ]
                 group_alive = sum(
                     1
                     for worker in group_workers
-                    if worker.alive
-                    and worker.process is not None
-                    and worker.process.is_alive()
+                    if worker.alive and worker.process is not None and worker.process.is_alive()
                 )
                 groups[group_name] = {
                     "configured_processes": group.process_count,
@@ -624,7 +609,7 @@ class ProcessPoolStrategy:
                     raise PlatformError(
                         ErrorCode.INTERNAL_ERROR,
                         f"Worker '{worker.worker_id}' exited during startup",
-                    )
+                    ) from Empty
 
         if message.kind != "READY" or message.generation != worker.generation:
             log.error(
@@ -661,16 +646,12 @@ class ProcessPoolStrategy:
             return
         close = getattr(queue, "close", None)
         if close is not None:
-            try:
+            with suppress(Exception):
                 close()
-            except Exception:
-                pass
         join_thread = getattr(queue, "join_thread", None)
         if join_thread is not None:
-            try:
+            with suppress(Exception):
                 join_thread()
-            except Exception:
-                pass
 
     def _close_queues(self) -> None:
         for worker in self._workers.values():
@@ -701,10 +682,8 @@ class ProcessPoolStrategy:
             process.join(timeout=1)
         close = getattr(process, "close", None)
         if close is not None:
-            try:
+            with suppress(Exception):
                 close()
-            except Exception:
-                pass
         worker.alive = False
         log.info(
             "worker_stopped worker_id=%s generation=%s",
@@ -724,8 +703,7 @@ class ProcessPoolStrategy:
 
     def _select_group_locked(self, group_names: list[str]) -> str:
         weights = {
-            group_name: len(self._alive_workers_locked(group_name))
-            for group_name in group_names
+            group_name: len(self._alive_workers_locked(group_name)) for group_name in group_names
         }
         total_weight = sum(weights.values())
         for group_name, weight in weights.items():
@@ -791,8 +769,7 @@ class ProcessPoolStrategy:
                     )
                 else:
                     log.warning(
-                        "worker_result_failed task_key=%s worker_id=%s generation=%s "
-                        "error=%s",
+                        "worker_result_failed task_key=%s worker_id=%s generation=%s error=%s",
                         task_key,
                         assignment[0],
                         assignment[1],
@@ -986,6 +963,4 @@ class ProcessPoolStrategy:
                 future.set_exception(exc)
 
 
-
 __all__ = ["ProcessPoolStrategy"]
-

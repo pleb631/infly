@@ -4,9 +4,8 @@ from infly.core.contracts import TaskRequest, TaskResult
 from infly.core.handlers import HandlerDefinition
 from infly.core.ports import HandlerProtocol
 from infly.runtime.handler_loader import load_handler
-from infly.runtime.registry import HandlerRegistry
-
 from infly.runtime.log import get_logger
+from infly.runtime.registry import HandlerRegistry
 
 log = get_logger()
 

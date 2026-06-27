@@ -19,15 +19,10 @@ class HandlerDefinition:
     _allow_reserved_runtime_context: InitVar[bool] = False
 
     def __post_init__(self, _allow_reserved_runtime_context: bool) -> None:
-        if (
-            "runtime_context" in self.init_context
-            and not _allow_reserved_runtime_context
-        ):
+        if "runtime_context" in self.init_context and not _allow_reserved_runtime_context:
             raise ValueError("init_context key 'runtime_context' is reserved")
         if self.reuse_mode not in {"worker_cached", "task_transient"}:
-            raise ValueError(
-                "reuse_mode must be one of 'worker_cached' or 'task_transient'"
-            )
+            raise ValueError("reuse_mode must be one of 'worker_cached' or 'task_transient'")
 
     @classmethod
     def with_runtime_context(
@@ -41,7 +36,7 @@ class HandlerDefinition:
             entrypoint=definition.entrypoint,
             init_context=ChainMap(
                 {"runtime_context": dict(runtime_context)},
-                definition.init_context,
+                dict(definition.init_context),
             ),
             init_kwargs=definition.init_kwargs,
             metadata=definition.metadata,
@@ -77,8 +72,9 @@ def _normalize_cache_value(value: Any, *, _seen: set[int] | None = None) -> Any:
         return value
 
     if isinstance(value, Enum):
+        value_cls = type(value)
         return {
-            "__enum__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
+            "__enum__": f"{value_cls.__module__}.{value_cls.__qualname__}",
             "value": _normalize_cache_value(value.value, _seen=_seen),
         }
 
@@ -92,8 +88,9 @@ def _normalize_cache_value(value: Any, *, _seen: set[int] | None = None) -> Any:
         return {"__bytes__": base64.b64encode(bytes(value)).decode("ascii")}
 
     if is_dataclass(value) and not isinstance(value, type):
+        value_cls = type(value)
         return {
-            "__dataclass__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
+            "__dataclass__": f"{value_cls.__module__}.{value_cls.__qualname__}",
             "fields": _normalize_cache_value(
                 {field.name: getattr(value, field.name) for field in fields(value)},
                 _seen=_seen,
@@ -127,9 +124,7 @@ def _normalize_cache_value(value: Any, *, _seen: set[int] | None = None) -> Any:
     if isinstance(value, (set, frozenset)):
         _seen.add(value_id)
         try:
-            normalized_items = [
-                _normalize_cache_value(item, _seen=_seen) for item in value
-            ]
+            normalized_items = [_normalize_cache_value(item, _seen=_seen) for item in value]
             return sorted(
                 normalized_items,
                 key=lambda item: json.dumps(
@@ -145,18 +140,17 @@ def _normalize_cache_value(value: Any, *, _seen: set[int] | None = None) -> Any:
     if hasattr(value, "__dict__"):
         _seen.add(value_id)
         try:
+            value_cls = type(value)
             return {
-                "__object__": (
-                    f"{value.__class__.__module__}.{value.__class__.__qualname__}"
-                ),
+                "__object__": (f"{value_cls.__module__}.{value_cls.__qualname__}"),
                 "state": _normalize_cache_value(vars(value), _seen=_seen),
             }
         finally:
             _seen.discard(value_id)
 
+    value_cls = type(value)
     raise TypeError(
-        "Unsupported cache_key value type: "
-        f"{value.__class__.__module__}.{value.__class__.__qualname__}"
+        f"Unsupported cache_key value type: {value_cls.__module__}.{value_cls.__qualname__}"
     )
 
 

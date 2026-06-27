@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import datetime
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Mapping, Self
+from typing import Any, Self
 
 from infly.core.errors import ErrorCode
 
