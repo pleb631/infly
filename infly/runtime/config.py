@@ -67,7 +67,6 @@ class WorkerSafetyPolicy:
 @dataclass(slots=True)
 class WorkerGroup:
     name: str
-    device: str
     process_count: int = 1
     handlers: list[str] = field(default_factory=list)
     environment: Mapping[str, str] = field(default_factory=dict)
@@ -75,7 +74,6 @@ class WorkerGroup:
 
     def __post_init__(self) -> None:
         self.name = _require_nonempty_text(self.name, field_name="name")
-        self.device = _require_nonempty_text(self.device, field_name="device")
         self.process_count = _require_int_at_least(
             self.process_count,
             1,
@@ -85,8 +83,6 @@ class WorkerGroup:
             raise ValueError("handler names must not be empty")
         if len(self.handlers) != len(set(self.handlers)):
             raise ValueError("handlers must not contain duplicates")
-        if "INFLY_DEVICE" in self.environment:
-            raise ValueError("environment key 'INFLY_DEVICE' is reserved")
         self.environment = dict(self.environment)
         if isinstance(self.safety, Mapping):
             self.safety = WorkerSafetyPolicy(**self.safety)

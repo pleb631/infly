@@ -95,11 +95,10 @@ def test_handler_executor_keeps_worker_cached_handler_instances() -> None:
 def test_worker_group_accepts_handlers_and_rejects_duplicates() -> None:
     group = WorkerGroup(
         name="cpu",
-        device="cpu",
         handlers=["echo", "other"],
     )
 
     assert group.handlers == ["echo", "other"]
 
     with pytest.raises(ValueError, match="duplicates"):
-        WorkerGroup(name="cpu", device="cpu", handlers=["echo", "echo"])
+        WorkerGroup(name="cpu", handlers=["echo", "echo"])

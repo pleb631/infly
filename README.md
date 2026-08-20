@@ -96,7 +96,6 @@ strategy = ProcessPoolStrategy(
     [
         WorkerGroup(
             name="cpu",
-            device="cpu",
             process_count=2,
             handlers=["echo"],
             environment={"OMP_NUM_THREADS": "1"},
@@ -134,6 +133,23 @@ scheduler；提前调用 `scheduler.start()` 仍然安全且等价。
 `TaskRequest` 不接收任务标识，而是在创建时自动生成唯一的 `task_id`；`submit()`
 会返回该 ID。它同时用于查询、执行结果和 trace 事件。
 同一个 `TaskRequest` 只能提交一次；需要再次执行时请创建新的请求对象。
+
+## 在线管理 WorkerGroup
+
+运行中的 `ProcessPoolStrategy` 可通过 `register_worker_group(group)` 注册新组。所有
+worker 完成预加载后，新组才会参与路由；启动失败不会发布该组。使用
+`unregister_worker_group(name)`（或 `unload_worker_group(name)`）卸载组时，它会立刻
+停止接收新任务并停止该组 worker；已分配给该组的任务会以
+`ErrorCode.WORKER_UNAVAILABLE` 失败。
+
+```python
+strategy.register_worker_group(
+    WorkerGroup(name="gpu", process_count=2, handlers=["echo"]),
+)
+
+# 不再向 gpu 组路由新请求，并回收该组进程。
+strategy.unregister_worker_group("gpu")
+```
 
 ## 查询任务
 
@@ -189,7 +205,7 @@ instrumentation.add_trace_sink(lambda event: print(event.name, event.task_id, ev
 scheduler = TaskScheduler(
     ProcessPoolStrategy(
         registry,
-        [WorkerGroup(name="cpu", device="cpu", process_count=2, handlers=["echo"])],
+        [WorkerGroup(name="cpu", process_count=2, handlers=["echo"])],
     ),
     scheduler_config=SchedulerConfig(num_threads=2),
     instrumentation=instrumentation,

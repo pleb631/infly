@@ -85,7 +85,6 @@ def _worker_loop(
     lifecycle_queue: Queue,
     registry: HandlerRegistry,
     environment: Mapping[str, str],
-    device: str,
     parent_sys_path: list[str],
     parent_cwd: str,
     log_queue: Queue,
@@ -96,16 +95,10 @@ def _worker_loop(
     setproctitle(f"INFLY::{worker_id}")
 
     log = get_logger(name=worker_id, category="worker")
-    log.info(
-        "worker_started worker_id=%s generation=%s device=%s",
-        worker_id,
-        generation,
-        device,
-    )
+    log.info("worker_started worker_id=%s generation=%s", worker_id, generation)
     try:
         _restore_parent_import_path(parent_sys_path, parent_cwd)
         os.environ.update(environment)
-        os.environ["INFLY_DEVICE"] = device
         executor = HandlerExecutor(registry)
         with log_context(name=worker_id, category="worker"):
             executor.preload()
@@ -206,6 +199,7 @@ class _WorkerState:
     process: Any = None
     alive: bool = False
     outstanding: int = 0
+    retiring: bool = False
     restart_times: deque[float] = field(default_factory=deque)
     next_restart_at: float | None = None
 
@@ -337,6 +331,7 @@ class ProcessPoolStrategy:
                 )
             )
             return future
+
         with self._lock:
             if not self._accepting:
                 log.warning(
@@ -431,6 +426,124 @@ class ProcessPoolStrategy:
             )
             return future
 
+    def register_worker_group(self, group: WorkerGroup) -> None:
+        """Start and publish a new worker group without interrupting the pool.
+
+        The group is not eligible for routing until every one of its workers has
+        completed handler preloading successfully.
+        """
+
+        handler_names = self._resolve_group_handlers(group)
+        workers = [
+            _WorkerState(
+                worker_id=f"{group.name}_R{index}",
+                index=index,
+                group=group,
+                handler_names=handler_names,
+            )
+            for index in range(group.process_count)
+        ]
+
+        with self._lock:
+            self._ensure_group_can_be_registered_locked(group.name)
+
+        try:
+            for worker in workers:
+                self._launch_worker(worker)
+            deadline = time.monotonic() + self._startup_timeout_seconds
+            for worker in workers:
+                self._await_worker_ready(
+                    worker,
+                    deadline,
+                    stop_event=self._supervisor_stop,
+                )
+        except Exception as exc:
+            self._dispose_workers(workers)
+            raise PlatformError(
+                ErrorCode.INTERNAL_ERROR,
+                f"WorkerGroup '{group.name}' startup failed: {exc}",
+            ) from exc
+
+        with self._lock:
+            try:
+                self._ensure_group_can_be_registered_locked(group.name)
+            except Exception:
+                self._dispose_workers(workers)
+                raise
+            self._groups[group.name] = group
+            self._group_handlers[group.name] = handler_names
+            for handler_name in handler_names:
+                self._handler_groups[handler_name].append(group.name)
+            self._workers.update({worker.worker_id: worker for worker in workers})
+
+        log.info(
+            "worker_group_registered group=%s workers=%s handlers=%s",
+            group.name,
+            len(workers),
+            handler_names,
+        )
+
+    def unregister_worker_group(self, group_name: str) -> None:
+        """Remove a worker group from routing and stop all of its workers.
+
+        Requests already assigned to the group fail with ``WORKER_UNAVAILABLE``;
+        no new request can be assigned once this method starts unloading it.
+        """
+
+        with self._lock:
+            if self._closing or self._close_complete:
+                raise PlatformError(
+                    ErrorCode.INTERNAL_ERROR,
+                    "ProcessPoolStrategy is closed",
+                )
+            group = self._groups.pop(group_name, None)
+            if group is None:
+                raise PlatformError(
+                    ErrorCode.NOT_FOUND,
+                    f"WorkerGroup '{group_name}' is not registered",
+                )
+
+            handler_names = self._group_handlers.pop(group_name)
+            for handler_name in handler_names:
+                groups = self._handler_groups[handler_name]
+                groups.remove(group_name)
+                if not groups:
+                    self._handler_groups.pop(handler_name, None)
+            self._group_cursors.pop(group_name, None)
+            self._smooth_weights.pop(group_name, None)
+
+            workers = [
+                worker
+                for worker in self._workers.values()
+                if worker.group.name == group_name
+            ]
+            failed: list[Future[TaskResult]] = []
+            for worker in workers:
+                worker.retiring = True
+                worker.alive = False
+                worker.next_restart_at = None
+                failed.extend(self._take_worker_futures_locked(worker))
+                self._workers.pop(worker.worker_id, None)
+
+        self._dispose_workers(workers)
+        self._fail_futures(
+            failed,
+            PlatformError(
+                ErrorCode.WORKER_UNAVAILABLE,
+                f"WorkerGroup '{group_name}' was unloaded",
+            ),
+        )
+        log.info(
+            "worker_group_unregistered group=%s workers=%s pending_failed=%s",
+            group_name,
+            len(workers),
+            len(failed),
+        )
+
+    # "Unload" is an equally useful name for the lifecycle operation and keeps
+    # callers from having to translate between deployment and process-pool terms.
+    unload_worker_group = unregister_worker_group
+
     def close(self) -> None:
         with self._lock:
             if self._close_complete:
@@ -483,7 +596,7 @@ class ProcessPoolStrategy:
             restarting_workers = sum(1 for worker in self._workers.values() if worker.next_restart_at is not None)
             degraded_workers = total_workers - alive_workers - restarting_workers
 
-            if self._close_complete or (not self._accepting and alive_workers == 0):
+            if total_workers == 0 or self._close_complete or (not self._accepting and alive_workers == 0):
                 status = HealthStatus.DOWN
             elif alive_workers == total_workers:
                 status = HealthStatus.OK
@@ -540,7 +653,6 @@ class ProcessPoolStrategy:
                 worker.lifecycle_queue,
                 child_registry,
                 worker.group.environment,
-                worker.group.device,
                 list(sys.path),
                 os.getcwd(),
                 self._log_manager.queue,
@@ -562,7 +674,6 @@ class ProcessPoolStrategy:
         context = {
             "group_name": worker.group.name,
             "worker_id": worker.worker_id,
-            "device": worker.group.device,
         }
         for handler_name in worker.handler_names:
             definition = self._registry.get(handler_name)
@@ -573,6 +684,44 @@ class ProcessPoolStrategy:
                 )
             )
         return child_registry
+
+    def _resolve_group_handlers(self, group: WorkerGroup) -> tuple[str, ...]:
+        all_handler_names = tuple(definition.handler_name for definition in self._registry.list())
+        handler_names = tuple(group.handlers) if group.handlers else all_handler_names
+        for handler_name in handler_names:
+            try:
+                self._registry.get(handler_name)
+            except PlatformError as exc:
+                raise PlatformError(
+                    ErrorCode.INTERNAL_ERROR,
+                    f"WorkerGroup '{group.name}' references missing handler '{handler_name}'",
+                ) from exc
+        return handler_names
+
+    def _ensure_group_can_be_registered_locked(self, group_name: str) -> None:
+        if self._closing or self._close_complete or not self._accepting:
+            raise PlatformError(
+                ErrorCode.INTERNAL_ERROR,
+                "ProcessPoolStrategy is closed",
+            )
+        if group_name in self._groups:
+            raise PlatformError(
+                ErrorCode.INTERNAL_ERROR,
+                f"WorkerGroup '{group_name}' is already registered",
+            )
+
+    def _dispose_workers(self, workers: list[_WorkerState]) -> None:
+        for worker in workers:
+            worker.retiring = True
+            worker.next_restart_at = None
+            if worker.process is not None and worker.process.is_alive():
+                with suppress(Exception):
+                    worker.task_queue.put(None, timeout=0.2)
+            self._stop_process(worker, terminate_after=1)
+            self._close_queue(worker.task_queue)
+            self._close_queue(worker.lifecycle_queue)
+            worker.task_queue = None
+            worker.lifecycle_queue = None
 
     def _await_initial_startup(self) -> None:
         deadline = time.monotonic() + self._startup_timeout_seconds
@@ -788,13 +937,30 @@ class ProcessPoolStrategy:
         log.info("pool_supervisor_started")
         while not self._supervisor_stop.wait(0.05):
             now = time.monotonic()
-            for worker in list(self._workers.values()):
+            with self._lock:
                 if self._closing:
                     log.info("pool_supervisor_stopped")
                     return
-                if worker.alive and not worker.process.is_alive():
+                workers = list(self._workers.values())
+            for worker in workers:
+                with self._lock:
+                    if (
+                        self._closing
+                        or worker.retiring
+                        or self._workers.get(worker.worker_id) is not worker
+                    ):
+                        continue
+                    worker_exited = worker.alive and (
+                        worker.process is None or not worker.process.is_alive()
+                    )
+                    restart_due = (
+                        not worker.alive
+                        and worker.next_restart_at is not None
+                        and now >= worker.next_restart_at
+                    )
+                if worker_exited:
                     self._handle_worker_exit(worker, now)
-                elif not worker.alive and worker.next_restart_at is not None and now >= worker.next_restart_at:
+                elif restart_due:
                     self._restart_worker(worker)
 
     def _handle_worker_exit(
@@ -803,7 +969,11 @@ class ProcessPoolStrategy:
         now: float,
     ) -> None:
         with self._lock:
-            if not worker.alive:
+            if (
+                not worker.alive
+                or worker.retiring
+                or self._workers.get(worker.worker_id) is not worker
+            ):
                 return
             worker.alive = False
             self._smooth_weights[worker.group.name] = 0
@@ -873,6 +1043,13 @@ class ProcessPoolStrategy:
         )
 
     def _restart_worker(self, worker: _WorkerState) -> None:
+        with self._lock:
+            if (
+                self._closing
+                or worker.retiring
+                or self._workers.get(worker.worker_id) is not worker
+            ):
+                return
         worker.next_restart_at = None
         worker.restart_times.append(time.monotonic())
         log.info(
@@ -881,7 +1058,14 @@ class ProcessPoolStrategy:
             worker.generation,
         )
         try:
-            self._launch_worker(worker)
+            with self._lock:
+                if (
+                    self._closing
+                    or worker.retiring
+                    or self._workers.get(worker.worker_id) is not worker
+                ):
+                    return
+                self._launch_worker(worker)
             deadline = time.monotonic() + self._startup_timeout_seconds
             self._await_worker_ready(
                 worker,
@@ -904,7 +1088,7 @@ class ProcessPoolStrategy:
                 exc_info=True,
             )
             self._stop_process(worker, terminate_after=0)
-            if not self._closing:
+            if not self._closing and not worker.retiring:
                 self._schedule_restart(worker, time.monotonic())
 
     def _shutdown_after_worker_failure(

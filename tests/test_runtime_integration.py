@@ -74,7 +74,7 @@ def test_submit_and_wait_runs_through_embedded_pool() -> None:
                 entrypoint="tests.support.fake_handlers:ContextHandler",
             )
         ),
-        [WorkerGroup(name="gpu", device="cuda:7")],
+        [WorkerGroup(name="gpu")],
     )
     scheduler = TaskScheduler(
         pool,
@@ -89,8 +89,6 @@ def test_submit_and_wait_runs_through_embedded_pool() -> None:
     assert result.task_id
     assert result.output["input"]["text"] == "hello"
     assert result.output["runtime_context"]["group_name"] == "gpu"
-    assert result.output["runtime_context"]["device"] == "cuda:7"
-    assert result.output["environment_device"] == "cuda:7"
     assert result.diagnostics["handler_name"] == "echo"
 
 
@@ -102,7 +100,7 @@ def test_submit_and_wait_propagates_worker_failure() -> None:
                 entrypoint="tests.support.fake_handlers:RaisingHandler",
             )
         ),
-        [WorkerGroup(name="cpu", device="cpu")],
+        [WorkerGroup(name="cpu")],
     )
     scheduler = TaskScheduler(
         pool,

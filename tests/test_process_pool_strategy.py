@@ -51,8 +51,8 @@ def test_pool_validates_groups_and_deployed_handlers() -> None:
     assert caught.value.code == ErrorCode.INTERNAL_ERROR
 
     duplicate_groups = [
-        WorkerGroup(name="same", device="cpu"),
-        WorkerGroup(name="same", device="cpu"),
+        WorkerGroup(name="same"),
+        WorkerGroup(name="same"),
     ]
     with pytest.raises(PlatformError, match="unique"):
         ProcessPoolStrategy(registry, duplicate_groups)
@@ -60,7 +60,7 @@ def test_pool_validates_groups_and_deployed_handlers() -> None:
     with pytest.raises(PlatformError, match="missing"):
         ProcessPoolStrategy(
             registry,
-            [WorkerGroup(name="cpu", device="cpu", handlers=["missing"])],
+            [WorkerGroup(name="cpu", handlers=["missing"])],
         )
 
 
@@ -72,7 +72,6 @@ def test_pool_injects_distinct_worker_context_without_mutating_registry() -> Non
         [
             WorkerGroup(
                 name="gpu",
-                device="cuda:7",
                 process_count=2,
                 environment={"INFLY_TEST_ENV": "configured"},
             )
@@ -85,9 +84,7 @@ def test_pool_injects_distinct_worker_context_without_mutating_registry() -> Non
 
     contexts = [result.output["runtime_context"] for result in results]
     assert {context["group_name"] for context in contexts} == {"gpu"}
-    assert {context["device"] for context in contexts} == {"cuda:7"}
     assert {context["worker_id"] for context in contexts} == {"gpu_R0", "gpu_R1"}
-    assert {result.output["environment_device"] for result in results} == {"cuda:7"}
     assert {result.output["custom_environment"] for result in results} == {"configured"}
     assert definition.init_context == {}
 
@@ -96,7 +93,7 @@ def test_pool_only_routes_handlers_deployed_to_a_group() -> None:
     registry = _registry(_definition("deployed"), _definition("idle"))
     pool = ProcessPoolStrategy(
         registry,
-        [WorkerGroup(name="cpu", device="cpu", handlers=["deployed"])],
+        [WorkerGroup(name="cpu", handlers=["deployed"])],
     )
     try:
         request = _request("ok", "deployed")
@@ -111,13 +108,99 @@ def test_pool_only_routes_handlers_deployed_to_a_group() -> None:
     assert caught.value.code == ErrorCode.WORKER_UNAVAILABLE
 
 
+def test_worker_groups_can_be_registered_and_unloaded_at_runtime() -> None:
+    pool = ProcessPoolStrategy(
+        _registry(_definition("cpu"), _definition("gpu")),
+        [WorkerGroup(name="cpu", handlers=["cpu"])],
+    )
+    try:
+        pool.register_worker_group(
+            WorkerGroup(name="gpu", handlers=["gpu"]),
+        )
+
+        result = pool.execute(_request("gpu-request", "gpu")).result(timeout=3)
+        snapshot = pool.health_snapshot()
+        pool.unregister_worker_group("gpu")
+
+        unavailable = pool.execute(_request("after-unload", "gpu"))
+        with pytest.raises(PlatformError) as caught:
+            unavailable.result(timeout=1)
+        unloaded_snapshot = pool.health_snapshot()
+    finally:
+        pool.close()
+
+    assert result.output["runtime_context"]["group_name"] == "gpu"
+    assert snapshot.detail["groups"]["gpu"]["alive_workers"] == 1
+    assert caught.value.code == ErrorCode.WORKER_UNAVAILABLE
+    assert "gpu" not in unloaded_snapshot.detail["groups"]
+
+
+def test_unloading_group_fails_its_assigned_requests() -> None:
+    pool = ProcessPoolStrategy(
+        _registry(_definition("slow", "SlowHandler", delay_seconds=5)),
+        [WorkerGroup(name="cpu", handlers=["slow"])],
+    )
+    try:
+        pending = pool.execute(_request("pending-unload", "slow"))
+        pool.unload_worker_group("cpu")
+        with pytest.raises(PlatformError) as caught:
+            pending.result(timeout=1)
+        snapshot = pool.health_snapshot()
+    finally:
+        pool.close()
+
+    assert caught.value.code == ErrorCode.WORKER_UNAVAILABLE
+    assert snapshot.status == HealthStatus.DOWN
+    assert snapshot.detail["groups"] == {}
+
+
+def test_runtime_worker_group_registration_validates_name_and_handlers() -> None:
+    pool = ProcessPoolStrategy(
+        _registry(_definition("echo")),
+        [WorkerGroup(name="cpu")],
+    )
+    try:
+        with pytest.raises(PlatformError, match="already registered"):
+            pool.register_worker_group(WorkerGroup(name="cpu"))
+        with pytest.raises(PlatformError, match="missing"):
+            pool.register_worker_group(
+                WorkerGroup(name="missing", handlers=["unknown"]),
+            )
+        with pytest.raises(PlatformError) as caught:
+            pool.unregister_worker_group("unknown")
+    finally:
+        pool.close()
+
+    assert caught.value.code == ErrorCode.NOT_FOUND
+
+
+def test_failed_runtime_worker_group_registration_is_not_published() -> None:
+    pool = ProcessPoolStrategy(
+        _registry(_definition("healthy"), _definition("broken", "FailingHandler")),
+        [WorkerGroup(name="cpu", handlers=["healthy"])],
+        startup_timeout_seconds=2,
+    )
+    try:
+        with pytest.raises(PlatformError, match="startup failed"):
+            pool.register_worker_group(
+                WorkerGroup(name="broken", handlers=["broken"]),
+            )
+        result = pool.execute(_request("still-healthy", "healthy")).result(timeout=3)
+        snapshot = pool.health_snapshot()
+    finally:
+        pool.close()
+
+    assert result.output["runtime_context"]["group_name"] == "cpu"
+    assert set(snapshot.detail["groups"]) == {"cpu"}
+
+
 def test_pool_fails_construction_when_handler_preload_fails() -> None:
     registry = _registry(_definition("broken", "FailingHandler"))
 
     with pytest.raises(PlatformError) as caught:
         ProcessPoolStrategy(
             registry,
-            [WorkerGroup(name="cpu", device="cpu")],
+            [WorkerGroup(name="cpu")],
             startup_timeout_seconds=2,
         )
 
@@ -193,7 +276,7 @@ def test_pool_startup_timeout_is_internal_error() -> None:
     with pytest.raises(PlatformError) as caught:
         ProcessPoolStrategy(
             registry,
-            [WorkerGroup(name="cpu", device="cpu")],
+            [WorkerGroup(name="cpu")],
             startup_timeout_seconds=0.05,
         )
 
@@ -210,13 +293,13 @@ def test_empty_handler_list_preloads_all_registry_handlers() -> None:
     with pytest.raises(PlatformError, match="startup"):
         ProcessPoolStrategy(
             registry,
-            [WorkerGroup(name="all", device="cpu", handlers=[])],
+            [WorkerGroup(name="all", handlers=[])],
             startup_timeout_seconds=2,
         )
 
     pool = ProcessPoolStrategy(
         registry,
-        [WorkerGroup(name="selected", device="cpu", handlers=["healthy"])],
+        [WorkerGroup(name="selected", handlers=["healthy"])],
     )
     pool.close()
 
@@ -225,8 +308,8 @@ def test_cross_group_routing_is_weighted_by_live_process_count() -> None:
     pool = ProcessPoolStrategy(
         _registry(_definition("echo")),
         [
-            WorkerGroup(name="small", device="cpu", process_count=1),
-            WorkerGroup(name="large", device="cpu", process_count=2),
+            WorkerGroup(name="small", process_count=1),
+            WorkerGroup(name="large", process_count=2),
         ],
     )
     try:
@@ -245,7 +328,7 @@ def test_duplicate_request_and_handler_failure_are_internal_errors() -> None:
             _definition("slow", "SlowHandler", delay_seconds=0.2),
             _definition("broken", "RaisingHandler"),
         ),
-        [WorkerGroup(name="cpu", device="cpu")],
+        [WorkerGroup(name="cpu")],
     )
     try:
         original = pool.execute(_request("duplicate", "slow"))
@@ -265,7 +348,7 @@ def test_duplicate_request_and_handler_failure_are_internal_errors() -> None:
 def test_close_is_idempotent_and_fails_pending_future() -> None:
     pool = ProcessPoolStrategy(
         _registry(_definition("slow", "SlowHandler", delay_seconds=5)),
-        [WorkerGroup(name="cpu", device="cpu", handlers=["slow"])],
+        [WorkerGroup(name="cpu", handlers=["slow"])],
     )
     pending = pool.execute(_request("pending", "slow"))
 
@@ -280,7 +363,7 @@ def test_close_is_idempotent_and_fails_pending_future() -> None:
 def test_close_stops_logging_listener() -> None:
     pool = ProcessPoolStrategy(
         _registry(_definition("echo")),
-        [WorkerGroup(name="cpu", device="cpu")],
+        [WorkerGroup(name="cpu")],
     )
 
     pool.close()
@@ -292,8 +375,8 @@ def test_health_snapshot_reports_live_workers_and_groups() -> None:
     pool = ProcessPoolStrategy(
         _registry(_definition("echo")),
         [
-            WorkerGroup(name="cpu", device="cpu", process_count=2),
-            WorkerGroup(name="gpu", device="cuda:0", process_count=1),
+            WorkerGroup(name="cpu", process_count=2),
+            WorkerGroup(name="gpu", process_count=1),
         ],
     )
     try:
@@ -380,7 +463,6 @@ def test_worker_loop_applies_log_context_in_worker_layer(
         lifecycle_queue=lifecycle_queue,
         registry=HandlerRegistry(),
         environment={},
-        device="cpu",
         parent_sys_path=[],
         parent_cwd="",
         log_queue=None,

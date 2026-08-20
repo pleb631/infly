@@ -49,7 +49,6 @@ def main() -> int:
     worker_groups = [
         WorkerGroup(
             name="cpu",
-            device="cpu",
             process_count=1,
             handlers=["echo", "broken"],
             environment={"INFLY_DEMO": "1"},
@@ -68,7 +67,7 @@ def main() -> int:
 
     print("=== SETUP ===")
     print("handlers=['echo', 'broken']")
-    print("worker_group=cpu device=cpu process_count=1")
+    print("worker_group=cpu process_count=1")
     print()
 
     scheduler.start()

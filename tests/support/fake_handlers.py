@@ -74,7 +74,6 @@ class ContextHandler:
             "input": input,
             "runtime_context": runtime_context,
             "worker_context": runtime_context,
-            "environment_device": os.environ.get("INFLY_DEVICE"),
             "custom_environment": os.environ.get("INFLY_TEST_ENV"),
         }
 
