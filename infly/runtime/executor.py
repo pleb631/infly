@@ -25,10 +25,9 @@ class HandlerExecutor:
                 "TaskRequest must be submitted through TaskScheduler before execution.",
             )
         log.debug(
-            "handler_execution_started task_id=%s handler=%s caller=%s",
+            "handler_execution_started task_id=%s handler=%s",
             request.task_id,
             request.handler_name,
-            request.caller,
         )
         definition = self._registry.get(request.handler_name)
         if definition.reuse_mode == "task_transient":
@@ -48,7 +47,6 @@ class HandlerExecutor:
             output=output,
             diagnostics={
                 "handler_name": definition.handler_name,
-                "caller": request.caller,
             },
         )
 

@@ -14,7 +14,6 @@ from infly.core.errors import ErrorCode
 class TaskRequest:
     handler_name: str
     input: Mapping[str, Any]
-    caller: str
     metadata: Mapping[str, Any] = field(default_factory=dict)
     task_id: str = field(default_factory=lambda: str(uuid4()), init=False)
 

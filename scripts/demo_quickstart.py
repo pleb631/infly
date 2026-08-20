@@ -76,19 +76,16 @@ def main() -> int:
         success_request = TaskRequest(
             handler_name="echo",
             input={"text": "hello quickstart"},
-            caller="quickstart",
             metadata={"trace_id": "trace-demo-success"},
         )
         async_request = TaskRequest(
             handler_name="echo",
             input={"text": "async hello"},
-            caller="quickstart",
             metadata={"trace_id": "trace-demo-async"},
         )
         failed_request = TaskRequest(
             handler_name="broken",
             input={"text": "boom"},
-            caller="quickstart",
             metadata={"trace_id": "trace-demo-failure"},
         )
 

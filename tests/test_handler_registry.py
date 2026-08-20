@@ -253,7 +253,7 @@ def test_handler_executor_reloads_replaced_definition() -> None:
     )
     executor = HandlerExecutor(registry)
 
-    first_request = TaskRequest(handler_name="echo", input={"text": "one"}, caller="test")
+    first_request = TaskRequest(handler_name="echo", input={"text": "one"})
     first = executor.execute(first_request)
     assert first.task_id == first_request.task_id
     assert CountingHandler.instances == 1
@@ -265,7 +265,7 @@ def test_handler_executor_reloads_replaced_definition() -> None:
             init_kwargs={"version": 2},
         )
     )
-    second_request = TaskRequest(handler_name="echo", input={"text": "two"}, caller="test")
+    second_request = TaskRequest(handler_name="echo", input={"text": "two"})
     second = executor.execute(second_request)
 
     assert second.task_id == second_request.task_id
@@ -304,7 +304,7 @@ def test_handler_executor_uses_default_log_context(
 
         with log_context():
             executor.preload()
-            request = TaskRequest(handler_name="echo", input={"text": "hello"}, caller="test")
+            request = TaskRequest(handler_name="echo", input={"text": "hello"})
             result = executor.execute(request)
 
         assert result.task_id == request.task_id

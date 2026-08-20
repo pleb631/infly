@@ -20,7 +20,6 @@ def _request(task_id: str = "req-1") -> TaskRequest:
     return TaskRequest(
         handler_name="echo",
         input={"text": "ok"},
-        caller="test",
     )
 
 
@@ -130,7 +129,6 @@ def test_task_request_generates_one_task_id_for_submission_and_result() -> None:
     request = TaskRequest(
         handler_name="echo",
         input={"text": "generated"},
-        caller="test",
     )
     try:
         task_id = scheduler.submit(request)
@@ -151,7 +149,6 @@ def test_task_request_can_only_be_submitted_once() -> None:
     request = TaskRequest(
         handler_name="echo",
         input={"text": "single-use"},
-        caller="test",
     )
     try:
         task_id = scheduler.submit(request)
@@ -170,8 +167,7 @@ def test_task_request_does_not_accept_a_task_id() -> None:
         TaskRequest(
             handler_name="echo",
             input={"text": "forbidden"},
-            caller="test",
-            task_id="caller-supplied",
+            task_id="externally-supplied",
         )
 
 

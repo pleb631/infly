@@ -13,7 +13,6 @@ def _record(task_id: str) -> TaskRecord:
         request=TaskRequest(
             handler_name="demo",
             input={},
-            caller="test",
         ),
     )
 

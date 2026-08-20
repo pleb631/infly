@@ -61,7 +61,6 @@ class TraceEvent:
     timestamp: datetime.datetime
     task_id: str
     handler_name: str
-    caller: str
     trace_id: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
     duration_ms: float | None = None
@@ -113,7 +112,6 @@ class RuntimeInstrumentation:
                 timestamp=datetime.datetime.now(datetime.UTC),
                 task_id=task_id,
                 handler_name=request.handler_name,
-                caller=request.caller,
                 trace_id=_trace_id(request),
                 metadata=dict(request.metadata),
             )
@@ -128,7 +126,6 @@ class RuntimeInstrumentation:
                 timestamp=datetime.datetime.now(datetime.UTC),
                 task_id=task_id,
                 handler_name=request.handler_name,
-                caller=request.caller,
                 trace_id=_trace_id(request),
                 metadata=dict(request.metadata),
             )
@@ -142,7 +139,6 @@ class RuntimeInstrumentation:
                 timestamp=datetime.datetime.now(datetime.UTC),
                 task_id=task_id,
                 handler_name=request.handler_name,
-                caller=request.caller,
                 trace_id=_trace_id(request),
                 metadata=dict(request.metadata),
                 duration_ms=duration_ms,
@@ -165,7 +161,6 @@ class RuntimeInstrumentation:
                 timestamp=datetime.datetime.now(datetime.UTC),
                 task_id=task_id,
                 handler_name=request.handler_name,
-                caller=request.caller,
                 trace_id=_trace_id(request),
                 metadata=dict(request.metadata),
                 duration_ms=duration_ms,

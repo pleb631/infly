@@ -16,7 +16,6 @@ def _request(task_id: str, handler_name: str = "echo") -> TaskRequest:
     return TaskRequest(
         handler_name=handler_name,
         input={"text": task_id},
-        caller="test",
         metadata={"trace_id": f"trace-{task_id}"},
     )
 

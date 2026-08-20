@@ -18,13 +18,12 @@ def test_handler_executor_executes_registered_handler() -> None:
     )
     executor = HandlerExecutor(registry)
 
-    request = TaskRequest(handler_name="echo", input={"text": "hello"}, caller="test")
+    request = TaskRequest(handler_name="echo", input={"text": "hello"})
     result = executor.execute(request)
 
     assert result.task_id == request.task_id
     assert result.output == {"echo": "ok:hello"}
     assert result.diagnostics["handler_name"] == "echo"
-    assert result.diagnostics["caller"] == "test"
 
 
 def test_handler_executor_recreates_transient_handler_instances() -> None:
@@ -41,8 +40,8 @@ def test_handler_executor_recreates_transient_handler_instances() -> None:
     )
     executor = HandlerExecutor(registry)
 
-    first_request = TaskRequest(handler_name="echo", input={"text": "one"}, caller="test")
-    second_request = TaskRequest(handler_name="echo", input={"text": "two"}, caller="test")
+    first_request = TaskRequest(handler_name="echo", input={"text": "one"})
+    second_request = TaskRequest(handler_name="echo", input={"text": "two"})
     first = executor.execute(first_request)
     second = executor.execute(second_request)
 
@@ -83,8 +82,8 @@ def test_handler_executor_keeps_worker_cached_handler_instances() -> None:
     )
     executor = HandlerExecutor(registry)
 
-    first_request = TaskRequest(handler_name="echo", input={"text": "one"}, caller="test")
-    second_request = TaskRequest(handler_name="echo", input={"text": "two"}, caller="test")
+    first_request = TaskRequest(handler_name="echo", input={"text": "one"})
+    second_request = TaskRequest(handler_name="echo", input={"text": "two"})
     first = executor.execute(first_request)
     second = executor.execute(second_request)
 

@@ -67,13 +67,11 @@ def main() -> int:
     success_request = TaskRequest(
         handler_name="echo",
         input={"text": "hello observability"},
-        caller="demo",
         metadata={"trace_id": "trace-demo-success"},
     )
     failed_request = TaskRequest(
         handler_name="broken",
         input={"text": "boom"},
-        caller="demo",
         metadata={"trace_id": "trace-demo-failure"},
     )
 

@@ -118,7 +118,6 @@ try:
         TaskRequest(
             handler_name="echo",
             input={"text": "hello"},
-            caller="api",
             metadata={"trace_id": "trace-1"},
         ),
         timeout_seconds=30,
@@ -145,7 +144,6 @@ task_id = scheduler.submit(
     TaskRequest(
         handler_name="echo",
         input={"text": "async"},
-        caller="api",
     ),
     priority=10,
 )
@@ -203,7 +201,6 @@ try:
         TaskRequest(
             handler_name="echo",
             input={"text": "hello"},
-            caller="api",
             metadata={"trace_id": "trace-health-demo"},
         )
     )

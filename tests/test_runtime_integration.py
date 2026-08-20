@@ -26,7 +26,6 @@ def _request(
     return TaskRequest(
         handler_name=handler_name,
         input={"text": task_id},
-        caller="integration",
     )
 
 
@@ -93,7 +92,6 @@ def test_submit_and_wait_runs_through_embedded_pool() -> None:
     assert result.output["runtime_context"]["device"] == "cuda:7"
     assert result.output["environment_device"] == "cuda:7"
     assert result.diagnostics["handler_name"] == "echo"
-    assert result.diagnostics["caller"] == "integration"
 
 
 def test_submit_and_wait_propagates_worker_failure() -> None:
