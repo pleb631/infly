@@ -253,15 +253,9 @@ def test_handler_executor_reloads_replaced_definition() -> None:
     )
     executor = HandlerExecutor(registry)
 
-    first = executor.execute(
-        TaskRequest(
-            task_key="req-1",
-            handler_name="echo",
-            input={"text": "one"},
-            caller="test",
-        )
-    )
-    assert first.task_key == "req-1"
+    first_request = TaskRequest(handler_name="echo", input={"text": "one"}, caller="test")
+    first = executor.execute(first_request)
+    assert first.task_id == first_request.task_id
     assert CountingHandler.instances == 1
 
     registry.add(
@@ -271,16 +265,10 @@ def test_handler_executor_reloads_replaced_definition() -> None:
             init_kwargs={"version": 2},
         )
     )
-    second = executor.execute(
-        TaskRequest(
-            task_key="req-2",
-            handler_name="echo",
-            input={"text": "two"},
-            caller="test",
-        )
-    )
+    second_request = TaskRequest(handler_name="echo", input={"text": "two"}, caller="test")
+    second = executor.execute(second_request)
 
-    assert second.task_key == "req-2"
+    assert second.task_id == second_request.task_id
     assert CountingHandler.instances == 2
 
 
@@ -316,16 +304,10 @@ def test_handler_executor_uses_default_log_context(
 
         with log_context():
             executor.preload()
-            result = executor.execute(
-                TaskRequest(
-                    task_key="req-1",
-                    handler_name="echo",
-                    input={"text": "hello"},
-                    caller="test",
-                )
-            )
+            request = TaskRequest(handler_name="echo", input={"text": "hello"}, caller="test")
+            result = executor.execute(request)
 
-        assert result.task_key == "req-1"
+        assert result.task_id == request.task_id
         assert any(
             record.message.startswith("handler_preload_started")
             and record.log_category == ""

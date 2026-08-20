@@ -36,11 +36,10 @@ def _definition(
     )
 
 
-def _request(task_key: str, handler_name: str = "echo") -> TaskRequest:
+def _request(task_id: str, handler_name: str = "echo") -> TaskRequest:
     return TaskRequest(
-        task_key=task_key,
         handler_name=handler_name,
-        input={"text": task_key},
+        input={"text": task_id},
         caller="test",
     )
 
@@ -101,14 +100,15 @@ def test_pool_only_routes_handlers_deployed_to_a_group() -> None:
         [WorkerGroup(name="cpu", device="cpu", handlers=["deployed"])],
     )
     try:
-        result = pool.execute(_request("ok", "deployed")).result(timeout=3)
+        request = _request("ok", "deployed")
+        result = pool.execute(request).result(timeout=3)
         unavailable = pool.execute(_request("missing", "idle"))
         with pytest.raises(PlatformError) as caught:
             unavailable.result(timeout=1)
     finally:
         pool.close()
 
-    assert result.task_key == "ok"
+    assert result.task_id == request.task_id
     assert caught.value.code == ErrorCode.WORKER_UNAVAILABLE
 
 
@@ -338,11 +338,11 @@ def test_worker_loop_applies_log_context_in_worker_layer(
 
         def execute(self, request: TaskRequest) -> TaskResult:
             logging.getLogger("fake.executor").info(
-                "executor_execute_called task_key=%s",
-                request.task_key,
+                "executor_execute_called task_id=%s",
+                request.task_id,
             )
             return TaskResult(
-                task_key=request.task_key,
+                task_id=request.task_id,
                 output={"result": "ok"},
             )
 
@@ -360,14 +360,14 @@ def test_worker_loop_applies_log_context_in_worker_layer(
     )
     monkeypatch.setattr(pool_module, "HandlerExecutor", FakeExecutor)
 
+    request = TaskRequest(
+        handler_name="echo",
+        input={"text": "hello"},
+        caller="test",
+    )
     task_queue = FakeQueue(
         [
-            TaskRequest(
-                task_key="req-1",
-                handler_name="echo",
-                input={"text": "hello"},
-                caller="test",
-            ),
+            request,
             None,
         ]
     )
@@ -403,4 +403,4 @@ def test_worker_loop_applies_log_context_in_worker_layer(
     )
     assert lifecycle_queue.put_items[0].kind == "READY"
     assert result_queue.put_items[0].ok is True
-    assert result_queue.put_items[0].payload.task_key == "req-1"
+    assert result_queue.put_items[0].payload.task_id == request.task_id

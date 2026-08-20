@@ -47,9 +47,8 @@ class InMemoryTaskBackend:
                 raise
             self._sequence += 1
         log.info(
-            "task_submitted task_id=%s task_key=%s handler=%s priority=%s",
+            "task_submitted task_id=%s handler=%s priority=%s",
             record.task_id,
-            record.request.task_key,
             record.request.handler_name,
             priority,
         )

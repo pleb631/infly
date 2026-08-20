@@ -1,6 +1,7 @@
 import threading
 
 from infly.core.contracts import TaskRequest, TaskResult
+from infly.core.errors import ErrorCode, PlatformError
 from infly.core.handlers import HandlerDefinition
 from infly.core.ports import HandlerProtocol
 from infly.runtime.handler_loader import load_handler
@@ -18,9 +19,14 @@ class HandlerExecutor:
         self._instances_lock = threading.Lock()
 
     def execute(self, request: TaskRequest) -> TaskResult:
+        if not request.task_id:
+            raise PlatformError(
+                ErrorCode.INVALID_REQUEST,
+                "TaskRequest must be submitted through TaskScheduler before execution.",
+            )
         log.debug(
-            "handler_execution_started task_key=%s handler=%s caller=%s",
-            request.task_key,
+            "handler_execution_started task_id=%s handler=%s caller=%s",
+            request.task_id,
             request.handler_name,
             request.caller,
         )
@@ -33,12 +39,12 @@ class HandlerExecutor:
         output = handler.handle(request.input)
 
         log.debug(
-            "handler_execution_completed task_key=%s handler=%s",
-            request.task_key,
+            "handler_execution_completed task_id=%s handler=%s",
+            request.task_id,
             request.handler_name,
         )
         return TaskResult(
-            task_key=request.task_key,
+            task_id=request.task_id,
             output=output,
             diagnostics={
                 "handler_name": definition.handler_name,

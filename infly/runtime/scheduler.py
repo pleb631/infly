@@ -5,7 +5,6 @@ import contextlib
 import copy as _copy
 import threading
 import time
-import uuid
 from concurrent.futures import Future
 
 from infly.core.contracts import (
@@ -153,11 +152,12 @@ class TaskScheduler:
             self._notify_waiters()
 
     def submit(self, request: TaskRequest, *, priority: int = 0) -> str:
+        self.start()
         with self._lifecycle_lock:
             if not self._accepting:
                 log.warning(
-                    "scheduler_submission_rejected task_key=%s handler=%s reason=closed",
-                    request.task_key,
+                    "scheduler_submission_rejected task_id=%s handler=%s reason=closed",
+                    request.task_id,
                     request.handler_name,
                 )
                 raise PlatformError(
@@ -165,10 +165,22 @@ class TaskScheduler:
                     "Scheduler is closed and no longer accepts submissions.",
                 )
 
+            task_id = request.task_id
+            if self._backend.get(task_id, copy=False) is not None:
+                log.warning(
+                    "scheduler_submission_rejected task_id=%s handler=%s reason=duplicate",
+                    task_id,
+                    request.handler_name,
+                )
+                raise PlatformError(
+                    ErrorCode.INVALID_REQUEST,
+                    f"Task '{task_id}' has already been submitted.",
+                )
+
             if not self._outstanding_slots.acquire(blocking=False):
                 log.warning(
-                    "scheduler_overloaded task_key=%s handler=%s limit=%s",
-                    request.task_key,
+                    "scheduler_overloaded task_id=%s handler=%s limit=%s",
+                    request.task_id,
                     request.handler_name,
                     self._scheduler_config.max_outstanding_tasks,
                 )
@@ -178,7 +190,6 @@ class TaskScheduler:
                     f"({self._scheduler_config.max_outstanding_tasks}).",
                 )
 
-            task_id = str(uuid.uuid4())
             with self._outstanding_lock:
                 self._outstanding_task_ids.add(task_id)
             try:
@@ -189,8 +200,8 @@ class TaskScheduler:
             except Exception as exc:
                 self._release_outstanding_slot(task_id)
                 log.error(
-                    "task_submission_failed task_key=%s handler=%s error=%s",
-                    request.task_key,
+                    "task_submission_failed task_id=%s handler=%s error=%s",
+                    request.task_id,
                     request.handler_name,
                     exc,
                     exc_info=True,
@@ -198,9 +209,8 @@ class TaskScheduler:
                 raise
 
             log.debug(
-                "scheduler_task_accepted task_id=%s task_key=%s handler=%s priority=%s",
+                "scheduler_task_accepted task_id=%s handler=%s priority=%s",
                 task_id,
-                request.task_key,
                 request.handler_name,
                 priority,
             )
@@ -216,7 +226,6 @@ class TaskScheduler:
         timeout_seconds: float | None = None,
         consume: bool = False,
     ) -> TaskResult:
-        self.start()
         task_id = self.submit(request, priority=priority)
         try:
             terminal = self.query(
@@ -254,7 +263,6 @@ class TaskScheduler:
         timeout_seconds: float | None = None,
         consume: bool = False,
     ) -> TaskResult:
-        self.start()
         task_id = self.submit(request, priority=priority)
         future = asyncio.Future()
         with self._async_waiters_lock:
@@ -441,9 +449,8 @@ class TaskScheduler:
         self._backend.update_status(task_id, TaskStatus.RUNNING)
         self._instrumentation.record_started(task_id, record.request)
         log.debug(
-            "task_execution_started task_id=%s task_key=%s handler=%s",
+            "task_execution_started task_id=%s handler=%s",
             task_id,
-            record.request.task_key,
             record.request.handler_name,
         )
         try:

@@ -5,22 +5,23 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Self
+from uuid import uuid4
 
 from infly.core.errors import ErrorCode
 
 
 @dataclass(slots=True, frozen=True)
 class TaskRequest:
-    task_key: str
     handler_name: str
     input: Mapping[str, Any]
     caller: str
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    task_id: str = field(default_factory=lambda: str(uuid4()), init=False)
 
 
 @dataclass(slots=True, frozen=True)
 class TaskResult:
-    task_key: str
+    task_id: str
     output: Mapping[str, Any] = field(default_factory=dict)
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
 

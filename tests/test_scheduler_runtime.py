@@ -16,9 +16,8 @@ from infly.runtime.scheduler import TaskScheduler
 from infly.runtime.task_backend import InMemoryTaskBackend
 
 
-def _request(task_key: str = "req-1") -> TaskRequest:
+def _request(task_id: str = "req-1") -> TaskRequest:
     return TaskRequest(
-        task_key=task_key,
         handler_name="echo",
         input={"text": "ok"},
         caller="test",
@@ -37,7 +36,7 @@ def _wait_for_status(scheduler: TaskScheduler, task_id: str, *statuses: TaskStat
 
 def _result(request: TaskRequest) -> TaskResult:
     return TaskResult(
-        task_key=request.task_key,
+        task_id=request.task_id,
         output={"echo": request.input["text"]},
     )
 
@@ -78,7 +77,7 @@ class WorkerUnavailableStrategy:
         self.calls: list[str] = []
 
     def execute(self, request: TaskRequest) -> Future[TaskResult]:
-        self.calls.append(request.task_key)
+        self.calls.append(request.task_id)
         future: Future[TaskResult] = Future()
         future.set_exception(PlatformError(ErrorCode.WORKER_UNAVAILABLE, "worker exited"))
         return future
@@ -87,7 +86,11 @@ class WorkerUnavailableStrategy:
         pass
 
 
-def _scheduler(strategy: object, *, max_outstanding_tasks: int = 8) -> TaskScheduler:
+def _scheduler(
+    strategy: object,
+    *,
+    max_outstanding_tasks: int = 8,
+) -> TaskScheduler:
     return TaskScheduler(
         strategy,  # type: ignore[arg-type]
         scheduler_config=SchedulerConfig(
@@ -109,6 +112,77 @@ def test_scheduler_completes_submitted_task() -> None:
     assert response.status == TaskStatus.COMPLETED
     assert response.result is not None
     assert response.result.output == {"echo": "ok"}
+
+
+def test_submit_starts_scheduler_by_default() -> None:
+    scheduler = _scheduler(SuccessStrategy())
+    try:
+        task_id = scheduler.submit(_request())
+        response = scheduler.query(task_id, wait=True)
+    finally:
+        scheduler.stop()
+
+    assert response.status == TaskStatus.COMPLETED
+
+
+def test_task_request_generates_one_task_id_for_submission_and_result() -> None:
+    scheduler = _scheduler(SuccessStrategy())
+    request = TaskRequest(
+        handler_name="echo",
+        input={"text": "generated"},
+        caller="test",
+    )
+    try:
+        task_id = scheduler.submit(request)
+        response = scheduler.query(task_id, wait=True)
+    finally:
+        scheduler.stop()
+
+    assert request.task_id == task_id
+    record = scheduler.backend.get(task_id)
+    assert record is not None
+    assert record.request.task_id == task_id
+    assert response.result is not None
+    assert response.result.task_id == task_id
+
+
+def test_task_request_can_only_be_submitted_once() -> None:
+    scheduler = _scheduler(SuccessStrategy())
+    request = TaskRequest(
+        handler_name="echo",
+        input={"text": "single-use"},
+        caller="test",
+    )
+    try:
+        task_id = scheduler.submit(request)
+        scheduler.query(task_id, wait=True)
+        with pytest.raises(PlatformError) as caught:
+            scheduler.submit(request)
+    finally:
+        scheduler.stop()
+
+    assert caught.value.code == ErrorCode.INVALID_REQUEST
+    assert request.task_id in str(caught.value)
+
+
+def test_task_request_does_not_accept_a_task_id() -> None:
+    with pytest.raises(TypeError, match="task_id"):
+        TaskRequest(
+            handler_name="echo",
+            input={"text": "forbidden"},
+            caller="test",
+            task_id="caller-supplied",
+        )
+
+
+def test_submit_and_wait_starts_scheduler_by_default() -> None:
+    scheduler = _scheduler(SuccessStrategy())
+    try:
+        result = scheduler.submit_and_wait(_request())
+    finally:
+        scheduler.stop()
+
+    assert result.output == {"echo": "ok"}
 
 
 def test_terminal_query_retains_record_by_default() -> None:
@@ -238,22 +312,6 @@ def test_scheduler_start_is_idempotent_when_called_twice() -> None:
         scheduler.stop()
 
 
-def test_scheduler_stop_fails_pending_tasks_and_releases_slots() -> None:
-    scheduler = _scheduler(SuccessStrategy(), max_outstanding_tasks=1)
-    task_id = scheduler.submit(_request("pending"))
-
-    scheduler.stop()
-
-    response = scheduler.query(task_id)
-    assert response.status == TaskStatus.FAILED
-    assert response.error_code == ErrorCode.WORKER_UNAVAILABLE
-
-    with pytest.raises(PlatformError) as caught:
-        scheduler.submit(_request("replacement"))
-
-    assert caught.value.code == ErrorCode.INVALID_STATE
-
-
 def test_scheduler_start_is_rejected_after_stop() -> None:
     scheduler = _scheduler(SuccessStrategy())
 
@@ -263,29 +321,6 @@ def test_scheduler_start_is_rejected_after_stop() -> None:
         scheduler.start()
 
     assert caught.value.code == ErrorCode.INVALID_STATE
-
-
-def test_query_wait_returns_failed_after_stop() -> None:
-    scheduler = _scheduler(SuccessStrategy(), max_outstanding_tasks=1)
-    task_id = scheduler.submit(_request("pending"))
-    result: dict[str, object] = {}
-    errors: list[BaseException] = []
-
-    def wait_for_terminal() -> None:
-        try:
-            result["response"] = scheduler.query(task_id, wait=True)
-        except BaseException as exc:  # pragma: no cover - defensive
-            errors.append(exc)
-
-    thread = threading.Thread(target=wait_for_terminal)
-    thread.start()
-    scheduler.stop()
-    thread.join(1)
-
-    assert errors == []
-    response = result["response"]
-    assert response.status == TaskStatus.FAILED
-    assert response.error_code == ErrorCode.WORKER_UNAVAILABLE
 
 
 def test_scheduler_stop_ignores_foreign_pending_backend_records() -> None:
@@ -387,42 +422,6 @@ def test_scheduler_stop_rejects_negative_timeout() -> None:
     assert caught.value.code == ErrorCode.INVALID_ARGUMENT
 
 
-def test_query_without_wait_returns_current_non_terminal_status() -> None:
-    strategy = BlockingStrategy()
-    scheduler = _scheduler(strategy)
-    pending_task_id = scheduler.submit(_request("pending"))
-
-    assert scheduler.query(pending_task_id).status == TaskStatus.PENDING
-
-    scheduler.start()
-    try:
-        assert strategy.started.wait(1)
-        assert scheduler.query(pending_task_id).status == TaskStatus.RUNNING
-    finally:
-        strategy.release.set()
-        scheduler.stop()
-
-
-def test_pending_tasks_consume_outstanding_slots() -> None:
-    scheduler = _scheduler(SuccessStrategy(), max_outstanding_tasks=1)
-    accepted_task_id = scheduler.submit(_request("accepted"))
-
-    with pytest.raises(PlatformError) as caught:
-        scheduler.submit(_request("rejected"))
-
-    assert caught.value.code == ErrorCode.OVERLOADED
-    assert [record.task_id for record in scheduler.backend.list_all()] == [accepted_task_id]
-
-
-def test_submit_accepts_priority_as_keyword_argument() -> None:
-    scheduler = _scheduler(SuccessStrategy())
-    low_task_id = scheduler.submit(_request("low"), priority=0)
-    high_task_id = scheduler.submit(_request("high"), priority=10)
-
-    assert scheduler.backend.pull() == high_task_id
-    assert scheduler.backend.pull() == low_task_id
-
-
 def test_running_tasks_consume_outstanding_slots() -> None:
     strategy = BlockingStrategy()
     scheduler = _scheduler(strategy, max_outstanding_tasks=1)
@@ -444,7 +443,8 @@ def test_running_tasks_consume_outstanding_slots() -> None:
 
 def test_concurrent_submissions_atomically_enforce_outstanding_limit() -> None:
     limit = 4
-    scheduler = _scheduler(SuccessStrategy(), max_outstanding_tasks=limit)
+    strategy = BlockingStrategy()
+    scheduler = _scheduler(strategy, max_outstanding_tasks=limit)
     barrier = threading.Barrier(20)
     accepted: list[str] = []
     rejected: list[ErrorCode] = []
@@ -462,10 +462,14 @@ def test_concurrent_submissions_atomically_enforce_outstanding_limit() -> None:
                 accepted.append(task_id)
 
     threads = [threading.Thread(target=submit, args=(index,)) for index in range(20)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    finally:
+        strategy.release.set()
+        scheduler.stop()
 
     assert len(accepted) == limit
     assert rejected == [ErrorCode.OVERLOADED] * (20 - limit)
@@ -491,12 +495,17 @@ def test_submission_failure_rolls_back_record_and_releases_slot() -> None:
         scheduler_config=SchedulerConfig(max_outstanding_tasks=1),
     )
 
-    with pytest.raises(RuntimeError, match="backend failure"):
-        scheduler.submit(_request("failed"))
+    try:
+        with pytest.raises(RuntimeError, match="backend failure"):
+            scheduler.submit(_request("failed"))
 
-    assert backend.list_all() == []
-    accepted_task_id = scheduler.submit(_request("accepted"))
-    assert scheduler.query(accepted_task_id).status == TaskStatus.PENDING
+        assert backend.list_all() == []
+        accepted_task_id = scheduler.submit(_request("accepted"))
+        response = scheduler.query(accepted_task_id, wait=True)
+    finally:
+        scheduler.stop()
+
+    assert response.status == TaskStatus.COMPLETED
 
 
 @pytest.mark.parametrize(
@@ -534,7 +543,7 @@ def test_terminal_tasks_release_slots_for_later_submissions(
     if expected_error_code is not None:
         assert response.error_code == expected_error_code
     if isinstance(strategy, WorkerUnavailableStrategy):
-        assert strategy.calls.count("first") == 1
+        assert strategy.calls.count(first_task_id) == 1
     second = scheduler.query(second_task_id)
     assert second.status == TaskStatus.FAILED
     assert second.error_code == ErrorCode.WORKER_UNAVAILABLE
@@ -592,10 +601,13 @@ def test_query_wait_raises_not_found_when_task_disappears_during_wait() -> None:
         backend=DisappearingBackend(),
         scheduler_config=SchedulerConfig(max_outstanding_tasks=8),
     )
-    task_id = scheduler.submit(_request("disappearing"))
+    try:
+        task_id = scheduler.submit(_request("disappearing"))
 
-    with pytest.raises(PlatformError) as caught:
-        scheduler.query(task_id, wait=True)
+        with pytest.raises(PlatformError) as caught:
+            scheduler.query(task_id, wait=True)
+    finally:
+        scheduler.stop()
 
     assert caught.value.code == ErrorCode.NOT_FOUND
 

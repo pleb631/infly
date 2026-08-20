@@ -11,7 +11,6 @@ def _record(task_id: str) -> TaskRecord:
     return TaskRecord(
         task_id=task_id,
         request=TaskRequest(
-            task_key=f"request-{task_id}",
             handler_name="demo",
             input={},
             caller="test",
@@ -83,7 +82,7 @@ def test_terminal_reads_return_isolated_copies() -> None:
     backend.update_status(
         "task-1",
         TaskStatus.COMPLETED,
-        result=TaskResult(task_key="task-1", output={"answer": 42}),
+        result=TaskResult(task_id="task-1", output={"answer": 42}),
     )
 
     fetched = backend.get("task-1", copy=True)
@@ -112,7 +111,7 @@ def test_read_retains_terminal_record_by_default(status: TaskStatus) -> None:
     backend.update_status(
         "task-1",
         status,
-        result=TaskResult(task_key="task-1", output={"answer": 42}),
+        result=TaskResult(task_id="task-1", output={"answer": 42}),
     )
     updated_at = backend.get("task-1", copy=True).updated_at  # type: ignore[union-attr]
 
@@ -241,13 +240,13 @@ def test_repeated_terminal_update_does_not_change_finish_order() -> None:
     backend.update_status(
         "first",
         TaskStatus.COMPLETED,
-        result=TaskResult(task_key="first", output={"version": 1}),
+        result=TaskResult(task_id="first", output={"version": 1}),
     )
     backend.update_status("second", TaskStatus.COMPLETED)
     backend.update_status(
         "first",
         TaskStatus.COMPLETED,
-        result=TaskResult(task_key="first", output={"version": 2}),
+        result=TaskResult(task_id="first", output={"version": 2}),
     )
     backend.update_status("third", TaskStatus.COMPLETED)
 

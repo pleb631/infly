@@ -23,7 +23,7 @@ class DemoStrategy:
         else:
             future.set_result(
                 TaskResult(
-                    task_key=request.task_key,
+                    task_id=request.task_id,
                     output={
                         "echo": request.input["text"],
                         "trace_id": request.metadata.get("trace_id"),
@@ -48,7 +48,7 @@ class DemoStrategy:
 def _print_trace(event: TraceEvent) -> None:
     duration = "n/a" if event.duration_ms is None else f"{event.duration_ms:.3f}ms"
     print(
-        f"{event.name} task_id={event.task_id} task_key={event.task_key} "
+        f"{event.name} task_id={event.task_id} "
         f"trace_id={event.trace_id} duration={duration} error_code={event.error_code}"
     )
 
@@ -65,14 +65,12 @@ def main() -> int:
     )
 
     success_request = TaskRequest(
-        task_key="demo-success",
         handler_name="echo",
         input={"text": "hello observability"},
         caller="demo",
         metadata={"trace_id": "trace-demo-success"},
     )
     failed_request = TaskRequest(
-        task_key="demo-failure",
         handler_name="broken",
         input={"text": "boom"},
         caller="demo",

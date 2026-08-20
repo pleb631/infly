@@ -113,11 +113,9 @@ scheduler = TaskScheduler(
     ),
 )
 
-scheduler.start()
 try:
     result = scheduler.submit_and_wait(
         TaskRequest(
-            task_key="req-1",
             handler_name="echo",
             input={"text": "hello"},
             caller="api",
@@ -131,6 +129,13 @@ finally:
     scheduler.stop()
 ```
 
+首次调用 `submit()`、`submit_and_wait()` 或 `submit_and_wait_async()` 会自动启动
+scheduler；提前调用 `scheduler.start()` 仍然安全且等价。
+
+`TaskRequest` 不接收任务标识，而是在创建时自动生成唯一的 `task_id`；`submit()`
+会返回该 ID。它同时用于查询、执行结果和 trace 事件。
+同一个 `TaskRequest` 只能提交一次；需要再次执行时请创建新的请求对象。
+
 ## 查询任务
 
 `submit()` 会返回一个 `task_id`，之后你可以按需查询当前状态或等待终态结果：
@@ -138,7 +143,6 @@ finally:
 ```python
 task_id = scheduler.submit(
     TaskRequest(
-        task_key="req-2",
         handler_name="echo",
         input={"text": "async"},
         caller="api",
@@ -182,9 +186,7 @@ registry.add(
 )
 
 instrumentation = RuntimeInstrumentation()
-instrumentation.add_trace_sink(
-    lambda event: print(event.name, event.task_key, event.trace_id)
-)
+instrumentation.add_trace_sink(lambda event: print(event.name, event.task_id, event.trace_id))
 
 scheduler = TaskScheduler(
     ProcessPoolStrategy(
@@ -199,7 +201,6 @@ scheduler.start()
 try:
     result = scheduler.submit_and_wait(
         TaskRequest(
-            task_key="health-demo",
             handler_name="echo",
             input={"text": "hello"},
             caller="api",

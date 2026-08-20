@@ -20,13 +20,12 @@ def _registry(*definitions: HandlerDefinition) -> HandlerRegistry:
 
 
 def _request(
-    task_key: str,
+    task_id: str,
     handler_name: str = "echo",
 ) -> TaskRequest:
     return TaskRequest(
-        task_key=task_key,
         handler_name=handler_name,
-        input={"text": task_key},
+        input={"text": task_id},
         caller="integration",
     )
 
@@ -56,8 +55,8 @@ class ConcurrentBlockingStrategy:
                 self.running -= 1
             future.set_result(
                 TaskResult(
-                    task_key=request.task_key,
-                    output={"task_key": request.task_key},
+                    task_id=request.task_id,
+                    output={"task_id": request.task_id},
                 )
             )
 
@@ -88,7 +87,7 @@ def test_submit_and_wait_runs_through_embedded_pool() -> None:
     finally:
         scheduler.stop()
 
-    assert result.task_key == "hello"
+    assert result.task_id
     assert result.output["input"]["text"] == "hello"
     assert result.output["runtime_context"]["group_name"] == "gpu"
     assert result.output["runtime_context"]["device"] == "cuda:7"

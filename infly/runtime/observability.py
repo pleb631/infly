@@ -60,7 +60,6 @@ class TraceEvent:
     name: str
     timestamp: datetime.datetime
     task_id: str
-    task_key: str
     handler_name: str
     caller: str
     trace_id: str | None = None
@@ -113,7 +112,6 @@ class RuntimeInstrumentation:
                 name="task.submitted",
                 timestamp=datetime.datetime.now(datetime.UTC),
                 task_id=task_id,
-                task_key=request.task_key,
                 handler_name=request.handler_name,
                 caller=request.caller,
                 trace_id=_trace_id(request),
@@ -129,7 +127,6 @@ class RuntimeInstrumentation:
                 name="task.started",
                 timestamp=datetime.datetime.now(datetime.UTC),
                 task_id=task_id,
-                task_key=request.task_key,
                 handler_name=request.handler_name,
                 caller=request.caller,
                 trace_id=_trace_id(request),
@@ -144,7 +141,6 @@ class RuntimeInstrumentation:
                 name="task.completed",
                 timestamp=datetime.datetime.now(datetime.UTC),
                 task_id=task_id,
-                task_key=request.task_key,
                 handler_name=request.handler_name,
                 caller=request.caller,
                 trace_id=_trace_id(request),
@@ -168,7 +164,6 @@ class RuntimeInstrumentation:
                 name="task.failed",
                 timestamp=datetime.datetime.now(datetime.UTC),
                 task_id=task_id,
-                task_key=request.task_key,
                 handler_name=request.handler_name,
                 caller=request.caller,
                 trace_id=_trace_id(request),

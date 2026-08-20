@@ -69,7 +69,7 @@ class WorkerLifecycleMessage:
 @dataclass(slots=True, frozen=True)
 class WorkerResultMessage:
     ok: bool
-    task_key: str
+    task_id: str
     worker_id: str
     generation: int
     payload: TaskResult | None = None
@@ -150,10 +150,10 @@ def _worker_loop(
             return
         try:
             log.debug(
-                "worker_request_started worker_id=%s generation=%s task_key=%s handler=%s",
+                "worker_request_started worker_id=%s generation=%s task_id=%s handler=%s",
                 worker_id,
                 generation,
-                request.task_key,
+                request.task_id,
                 request.handler_name,
             )
             with log_context(name=worker_id, category="worker"):
@@ -162,23 +162,23 @@ def _worker_loop(
                 WorkerResultMessage(
                     ok=True,
                     payload=result,
-                    task_key=request.task_key,
+                    task_id=request.task_id,
                     worker_id=worker_id,
                     generation=generation,
                 )
             )
             log.debug(
-                "worker_request_completed worker_id=%s generation=%s task_key=%s",
+                "worker_request_completed worker_id=%s generation=%s task_id=%s",
                 worker_id,
                 generation,
-                request.task_key,
+                request.task_id,
             )
         except Exception as exc:
             log.error(
-                "worker_request_failed worker_id=%s generation=%s task_key=%s error=%s",
+                "worker_request_failed worker_id=%s generation=%s task_id=%s error=%s",
                 worker_id,
                 generation,
-                request.task_key,
+                request.task_id,
                 exc,
                 exc_info=True,
             )
@@ -187,7 +187,7 @@ def _worker_loop(
                     ok=False,
                     error_code=_dump_error_code(getattr(exc, "code", ErrorCode.INTERNAL_ERROR)),
                     error_message=str(exc),
-                    task_key=request.task_key,
+                    task_id=request.task_id,
                     worker_id=worker_id,
                     generation=generation,
                 )
@@ -329,11 +329,19 @@ class ProcessPoolStrategy:
         request: TaskRequest,
     ) -> Future[TaskResult]:
         future: Future[TaskResult] = Future()
+        if not request.task_id:
+            future.set_exception(
+                PlatformError(
+                    ErrorCode.INVALID_REQUEST,
+                    "TaskRequest must be submitted through TaskScheduler before execution.",
+                )
+            )
+            return future
         with self._lock:
             if not self._accepting:
                 log.warning(
-                    "request_rejected task_key=%s reason=pool_closed",
-                    request.task_key,
+                    "request_rejected task_id=%s reason=pool_closed",
+                    request.task_id,
                 )
                 future.set_exception(
                     PlatformError(
@@ -343,15 +351,15 @@ class ProcessPoolStrategy:
                 )
                 return future
 
-            if request.task_key in self._futures:
+            if request.task_id in self._futures:
                 log.warning(
-                    "request_rejected task_key=%s reason=duplicate",
-                    request.task_key,
+                    "request_rejected task_id=%s reason=duplicate",
+                    request.task_id,
                 )
                 future.set_exception(
                     PlatformError(
                         ErrorCode.INTERNAL_ERROR,
-                        f"Duplicate task_key: {request.task_key}",
+                        f"Duplicate task_id: {request.task_id}",
                     )
                 )
                 return future
@@ -363,8 +371,8 @@ class ProcessPoolStrategy:
             ]
             if not group_names:
                 log.warning(
-                    "request_rejected task_key=%s handler=%s reason=no_live_worker",
-                    request.task_key,
+                    "request_rejected task_id=%s handler=%s reason=no_live_worker",
+                    request.task_id,
                     request.handler_name,
                 )
                 future.set_exception(
@@ -375,22 +383,22 @@ class ProcessPoolStrategy:
                 )
                 return future
 
-            self._futures[request.task_key] = future
+            self._futures[request.task_id] = future
             remaining_groups = list(group_names)
             while remaining_groups:
                 group_name = self._select_group_locked(remaining_groups)
                 for worker in self._ordered_workers_locked(group_name):
                     assignment = (worker.worker_id, worker.generation)
-                    self._assignments[request.task_key] = assignment
+                    self._assignments[request.task_id] = assignment
                     worker.outstanding += 1
                     try:
                         worker.task_queue.put_nowait(request)
                     except Exception as exc:
                         worker.outstanding -= 1
-                        self._assignments.pop(request.task_key, None)
+                        self._assignments.pop(request.task_id, None)
                         log.warning(
-                            "request_assignment_failed task_key=%s worker_id=%s generation=%s error=%s",
-                            request.task_key,
+                            "request_assignment_failed task_id=%s worker_id=%s generation=%s error=%s",
+                            request.task_id,
                             worker.worker_id,
                             worker.generation,
                             exc,
@@ -400,8 +408,8 @@ class ProcessPoolStrategy:
 
                     self._group_cursors[group_name] = (worker.index + 1) % worker.group.process_count
                     log.debug(
-                        "request_assigned task_key=%s handler=%s worker_id=%s generation=%s",
-                        request.task_key,
+                        "request_assigned task_id=%s handler=%s worker_id=%s generation=%s",
+                        request.task_id,
                         request.handler_name,
                         worker.worker_id,
                         worker.generation,
@@ -409,10 +417,10 @@ class ProcessPoolStrategy:
                     return future
                 remaining_groups.remove(group_name)
 
-            self._futures.pop(request.task_key, None)
+            self._futures.pop(request.task_id, None)
             log.warning(
-                "request_rejected task_key=%s handler=%s reason=assignment_failed",
-                request.task_key,
+                "request_rejected task_id=%s handler=%s reason=assignment_failed",
+                request.task_id,
                 request.handler_name,
             )
             future.set_exception(
@@ -725,18 +733,18 @@ class ProcessPoolStrategy:
             except Empty:
                 continue
 
-            task_key = item.task_key
+            task_id = item.task_id
             assignment = (item.worker_id, item.generation)
 
             with self._lock:
-                if self._assignments.get(task_key) != assignment:
+                if self._assignments.get(task_id) != assignment:
                     log.debug(
-                        "worker_result_ignored task_key=%s reason=stale_assignment",
-                        task_key,
+                        "worker_result_ignored task_id=%s reason=stale_assignment",
+                        task_id,
                     )
                     continue
-                self._assignments.pop(task_key, None)
-                future = self._futures.pop(task_key, None)
+                self._assignments.pop(task_id, None)
+                future = self._futures.pop(task_id, None)
                 worker = self._workers.get(assignment[0])
                 if worker is not None and worker.outstanding > 0:
                     worker.outstanding -= 1
@@ -747,15 +755,15 @@ class ProcessPoolStrategy:
                 if item.ok:
                     future.set_result(item.payload)
                     log.debug(
-                        "worker_result_completed task_key=%s worker_id=%s generation=%s",
-                        task_key,
+                        "worker_result_completed task_id=%s worker_id=%s generation=%s",
+                        task_id,
                         assignment[0],
                         assignment[1],
                     )
                 else:
                     log.warning(
-                        "worker_result_failed task_key=%s worker_id=%s generation=%s error=%s",
-                        task_key,
+                        "worker_result_failed task_id=%s worker_id=%s generation=%s error=%s",
+                        task_id,
                         assignment[0],
                         assignment[1],
                         item.error_message or "Unknown worker error",
@@ -768,8 +776,8 @@ class ProcessPoolStrategy:
                     )
             except Exception as exc:
                 log.error(
-                    "worker_result_processing_failed task_key=%s error=%s",
-                    task_key,
+                    "worker_result_processing_failed task_id=%s error=%s",
+                    task_id,
                     exc,
                     exc_info=True,
                 )
@@ -829,11 +837,11 @@ class ProcessPoolStrategy:
     ) -> list[Future[TaskResult]]:
         failed: list[Future[TaskResult]] = []
         assignment = (worker.worker_id, worker.generation)
-        for task_key, owner in list(self._assignments.items()):
+        for task_id, owner in list(self._assignments.items()):
             if owner != assignment:
                 continue
-            self._assignments.pop(task_key, None)
-            future = self._futures.pop(task_key, None)
+            self._assignments.pop(task_id, None)
+            future = self._futures.pop(task_id, None)
             if future is not None:
                 failed.append(future)
         worker.outstanding = 0

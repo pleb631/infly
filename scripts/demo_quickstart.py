@@ -19,7 +19,7 @@ from infly import (
 def _print_trace(event: TraceEvent) -> None:
     duration = "n/a" if event.duration_ms is None else f"{event.duration_ms:.3f}ms"
     print(
-        f"{event.name} task_id={event.task_id} task_key={event.task_key} "
+        f"{event.name} task_id={event.task_id} "
         f"handler={event.handler_name} trace_id={event.trace_id} "
         f"duration={duration} error_code={event.error_code}"
     )
@@ -74,21 +74,18 @@ def main() -> int:
     scheduler.start()
     try:
         success_request = TaskRequest(
-            task_key="demo-success",
             handler_name="echo",
             input={"text": "hello quickstart"},
             caller="quickstart",
             metadata={"trace_id": "trace-demo-success"},
         )
         async_request = TaskRequest(
-            task_key="demo-async",
             handler_name="echo",
             input={"text": "async hello"},
             caller="quickstart",
             metadata={"trace_id": "trace-demo-async"},
         )
         failed_request = TaskRequest(
-            task_key="demo-failure",
             handler_name="broken",
             input={"text": "boom"},
             caller="quickstart",

@@ -12,13 +12,12 @@ from infly.runtime.observability import (
 from infly.runtime.scheduler import TaskScheduler
 
 
-def _request(task_key: str, handler_name: str = "echo") -> TaskRequest:
+def _request(task_id: str, handler_name: str = "echo") -> TaskRequest:
     return TaskRequest(
-        task_key=task_key,
         handler_name=handler_name,
-        input={"text": task_key},
+        input={"text": task_id},
         caller="test",
-        metadata={"trace_id": f"trace-{task_key}"},
+        metadata={"trace_id": f"trace-{task_id}"},
     )
 
 
@@ -40,7 +39,7 @@ class SuccessThenFailStrategy:
         else:
             future.set_result(
                 TaskResult(
-                    task_key=request.task_key,
+                    task_id=request.task_id,
                     output={"echo": request.input["text"]},
                 )
             )

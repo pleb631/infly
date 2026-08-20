@@ -18,16 +18,10 @@ def test_handler_executor_executes_registered_handler() -> None:
     )
     executor = HandlerExecutor(registry)
 
-    result = executor.execute(
-        TaskRequest(
-            task_key="task-1",
-            handler_name="echo",
-            input={"text": "hello"},
-            caller="test",
-        )
-    )
+    request = TaskRequest(handler_name="echo", input={"text": "hello"}, caller="test")
+    result = executor.execute(request)
 
-    assert result.task_key == "task-1"
+    assert result.task_id == request.task_id
     assert result.output == {"echo": "ok:hello"}
     assert result.diagnostics["handler_name"] == "echo"
     assert result.diagnostics["caller"] == "test"
@@ -47,25 +41,13 @@ def test_handler_executor_recreates_transient_handler_instances() -> None:
     )
     executor = HandlerExecutor(registry)
 
-    first = executor.execute(
-        TaskRequest(
-            task_key="task-1",
-            handler_name="echo",
-            input={"text": "one"},
-            caller="test",
-        )
-    )
-    second = executor.execute(
-        TaskRequest(
-            task_key="task-2",
-            handler_name="echo",
-            input={"text": "two"},
-            caller="test",
-        )
-    )
+    first_request = TaskRequest(handler_name="echo", input={"text": "one"}, caller="test")
+    second_request = TaskRequest(handler_name="echo", input={"text": "two"}, caller="test")
+    first = executor.execute(first_request)
+    second = executor.execute(second_request)
 
-    assert first.task_key == "task-1"
-    assert second.task_key == "task-2"
+    assert first.task_id == first_request.task_id
+    assert second.task_id == second_request.task_id
     assert CountingHandler.instances == 2
 
 
@@ -101,25 +83,13 @@ def test_handler_executor_keeps_worker_cached_handler_instances() -> None:
     )
     executor = HandlerExecutor(registry)
 
-    first = executor.execute(
-        TaskRequest(
-            task_key="task-1",
-            handler_name="echo",
-            input={"text": "one"},
-            caller="test",
-        )
-    )
-    second = executor.execute(
-        TaskRequest(
-            task_key="task-2",
-            handler_name="echo",
-            input={"text": "two"},
-            caller="test",
-        )
-    )
+    first_request = TaskRequest(handler_name="echo", input={"text": "one"}, caller="test")
+    second_request = TaskRequest(handler_name="echo", input={"text": "two"}, caller="test")
+    first = executor.execute(first_request)
+    second = executor.execute(second_request)
 
-    assert first.task_key == "task-1"
-    assert second.task_key == "task-2"
+    assert first.task_id == first_request.task_id
+    assert second.task_id == second_request.task_id
     assert CountingHandler.instances == 1
 
 
