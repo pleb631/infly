@@ -512,11 +512,7 @@ class ProcessPoolStrategy:
             self._group_cursors.pop(group_name, None)
             self._smooth_weights.pop(group_name, None)
 
-            workers = [
-                worker
-                for worker in self._workers.values()
-                if worker.group.name == group_name
-            ]
+            workers = [worker for worker in self._workers.values() if worker.group.name == group_name]
             failed: list[Future[TaskResult]] = []
             for worker in workers:
                 worker.retiring = True
@@ -944,19 +940,11 @@ class ProcessPoolStrategy:
                 workers = list(self._workers.values())
             for worker in workers:
                 with self._lock:
-                    if (
-                        self._closing
-                        or worker.retiring
-                        or self._workers.get(worker.worker_id) is not worker
-                    ):
+                    if self._closing or worker.retiring or self._workers.get(worker.worker_id) is not worker:
                         continue
-                    worker_exited = worker.alive and (
-                        worker.process is None or not worker.process.is_alive()
-                    )
+                    worker_exited = worker.alive and (worker.process is None or not worker.process.is_alive())
                     restart_due = (
-                        not worker.alive
-                        and worker.next_restart_at is not None
-                        and now >= worker.next_restart_at
+                        not worker.alive and worker.next_restart_at is not None and now >= worker.next_restart_at
                     )
                 if worker_exited:
                     self._handle_worker_exit(worker, now)
@@ -969,11 +957,7 @@ class ProcessPoolStrategy:
         now: float,
     ) -> None:
         with self._lock:
-            if (
-                not worker.alive
-                or worker.retiring
-                or self._workers.get(worker.worker_id) is not worker
-            ):
+            if not worker.alive or worker.retiring or self._workers.get(worker.worker_id) is not worker:
                 return
             worker.alive = False
             self._smooth_weights[worker.group.name] = 0
@@ -1044,11 +1028,7 @@ class ProcessPoolStrategy:
 
     def _restart_worker(self, worker: _WorkerState) -> None:
         with self._lock:
-            if (
-                self._closing
-                or worker.retiring
-                or self._workers.get(worker.worker_id) is not worker
-            ):
+            if self._closing or worker.retiring or self._workers.get(worker.worker_id) is not worker:
                 return
         worker.next_restart_at = None
         worker.restart_times.append(time.monotonic())
@@ -1059,11 +1039,7 @@ class ProcessPoolStrategy:
         )
         try:
             with self._lock:
-                if (
-                    self._closing
-                    or worker.retiring
-                    or self._workers.get(worker.worker_id) is not worker
-                ):
+                if self._closing or worker.retiring or self._workers.get(worker.worker_id) is not worker:
                     return
                 self._launch_worker(worker)
             deadline = time.monotonic() + self._startup_timeout_seconds
