@@ -173,11 +173,7 @@ class PoolLifecycleState:
 
     def is_current_worker(self, worker: WorkerState) -> bool:
         with self.lock:
-            return (
-                not self._closing
-                and not worker.retiring
-                and self._workers.get(worker.worker_id) is worker
-            )
+            return not self._closing and not worker.retiring and self._workers.get(worker.worker_id) is worker
 
     def has_task(self, task_id: str) -> bool:
         with self.lock:

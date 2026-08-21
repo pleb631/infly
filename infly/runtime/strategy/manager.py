@@ -194,7 +194,13 @@ class WorkerManager:
                 self._router.reset_group_weight(worker.group.name)
             log.info("worker_restart_completed worker_id=%s generation=%s", worker.worker_id, worker.generation)
         except Exception as exc:
-            log.error("worker_restart_failed worker_id=%s generation=%s error=%s", worker.worker_id, worker.generation, exc, exc_info=True)
+            log.error(
+                "worker_restart_failed worker_id=%s generation=%s error=%s",
+                worker.worker_id,
+                worker.generation,
+                exc,
+                exc_info=True,
+            )
             self._controller.cleanup_failed_start(worker)
             with self._state.lock:
                 if not self._state.closing and not worker.retiring:
